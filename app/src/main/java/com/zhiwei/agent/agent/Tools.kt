@@ -90,42 +90,42 @@ object ToolRegistry {
             TOOL_TIME,
             "当前时间",
             "获取手机当前的日期、时间与星期。",
-            schema(emptyArray())
+            schema()
         )
 
         list += ToolSpec(
             TOOL_CALC,
             "计算器",
             "计算一个数学表达式，支持 + - * / % 和括号、小数。",
-            schema(arrayOf("expression" to str("要计算的表达式，例如 (12+8)*3/4")), listOf("expression"))
+            schema("expression" to str("要计算的表达式，例如 (12+8)*3/4"), required = listOf("expression"))
         )
 
         list += ToolSpec(
             TOOL_DEVICE,
             "设备信息",
             "获取手机型号、系统版本、电量、内存等信息。",
-            schema(emptyArray())
+            schema()
         )
 
         list += ToolSpec(
             TOOL_CLIPBOARD,
             "读剪贴板",
             "读取手机剪贴板当前的文本内容。",
-            schema(emptyArray())
+            schema()
         )
 
         list += ToolSpec(
             TOOL_OPEN_URL,
             "打开链接",
             "用系统浏览器打开一个网址。",
-            schema(arrayOf("url" to str("完整网址，需以 http:// 或 https:// 开头")), listOf("url"))
+            schema("url" to str("完整网址，需以 http:// 或 https:// 开头"), required = listOf("url"))
         )
 
         list += ToolSpec(
             TOOL_FETCH,
             "抓取网页",
             "抓取网页并提取正文纯文本，适合读取指定页面的内容。",
-            schema(arrayOf("url" to str("完整网址")), listOf("url"))
+            schema("url" to str("完整网址"), required = listOf("url"))
         )
 
         if (settings.tavilyApiKey.isNotBlank()) {
@@ -133,7 +133,7 @@ object ToolRegistry {
                 TOOL_SEARCH,
                 "联网搜索",
                 "用搜索引擎检索实时信息，返回若干条结果摘要。",
-                schema(arrayOf("query" to str("搜索关键词")), listOf("query"))
+                schema("query" to str("搜索关键词"), required = listOf("query"))
             )
         }
 
@@ -142,7 +142,7 @@ object ToolRegistry {
                 TOOL_SHELL,
                 "终端命令",
                 "在手机本地执行一条 shell 命令并返回输出，可用于查看文件、系统信息等。",
-                schema(arrayOf("command" to str("要执行的 shell 命令")), listOf("command"))
+                schema("command" to str("要执行的 shell 命令"), required = listOf("command"))
             )
         }
 
