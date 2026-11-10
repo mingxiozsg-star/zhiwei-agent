@@ -131,8 +131,8 @@ data class ChatMessage(
                 content = o.optString("content", ""),
                 toolCalls = tcs,
                 activities = acts,
-                toolCallId = if (o.isNull("toolCallId")) null else o.optString("toolCallId", null),
-                toolName = if (o.isNull("toolName")) null else o.optString("toolName", null),
+                toolCallId = if (o.isNull("toolCallId")) null else o.optString("toolCallId", "").ifEmpty { null },
+                toolName = if (o.isNull("toolName")) null else o.optString("toolName", "").ifEmpty { null },
                 timestamp = o.optLong("timestamp", System.currentTimeMillis()),
                 isError = o.optBoolean("isError", false)
             )

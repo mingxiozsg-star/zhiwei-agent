@@ -34,11 +34,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhiwei.agent.data.ACT_DONE
 import com.zhiwei.agent.data.ACT_ERROR
 import com.zhiwei.agent.data.ACT_RUNNING
+import com.zhiwei.agent.data.COLLAPSE_MULTI
+import com.zhiwei.agent.data.COLLAPSE_NONE
+import com.zhiwei.agent.data.COLLAPSE_SINGLE
 import com.zhiwei.agent.data.ChatMessage
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_USER
@@ -56,240 +60,313 @@ fun MessageItem(
     message: ChatMessage,
     onCopy: (String) -> Unit,
     onDelete: () -> Unit,
-    onRegenerate: (() -> Unit)? = null
+    onRegenerate: (() -> Unit)? = null,
+    showTimestamp: Boolean = false,
+    collapseMode: String = COLLAPSE_MULTI
 ) {
     var menu by remember { mutableStateOf(false) }
 
     when (message.role) {
-        ROLE_USER -> Row(
+        ROLE_USER -> Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
+            horizontalAlignment = Alignment.End
         ) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp),
+                    modifier = Modifier
+                        .widthIn(max = 320.dp)
+                        .pointerInput(message.id) {
+                            detectTapGestures(onLongPress = { menu = true })
+                        }
+                ) {
+                    Text(
+                        text = message.content,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                MessageMenu(
+                    expanded = menu,
+                    onDismiss = { menu = false },
+                    onCopy = { onCopy(message.content) },
+                    onDelete = onDelete,
+                    onRegenerate = null
+                )
+            }
+            if (showTimestamp) TimestampLabel(message.timestamp, Alignment.End)
+        }
+
+        ROLE_ASSISTANT -> Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
                 modifier = Modifier
-                    .widthIn(max = 320.dp)
+                    .fillMaxWidth()
                     .pointerInput(message.id) {
                         detectTapGestures(onLongPress = { menu = true })
                     }
             ) {
-                Text(
-                    text = message.content,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        if (message.activities.isNotEmpty()) {
+                            ToolActivityGroup(
+                                messageId = message.id,
+                                activities = message.activities,
+                                collapseMode = collapseMode
+                            )
+                            if (message.content.isNotBlank()) Spacer(Modifier.height(8.dp))
+                        }
+                        when {
+                            message.content.isNotBlank() -> MarkdownText(
+                                text = message.content,
+                                onCopyCode = onCopy
+                            )
+
+                            message.streaming && message.activities.isEmpty() -> TypingDots()
+                            message.streaming -> Unit
+                            else -> Text(
+                                text = "（没有内容）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (message.streaming && message.content.isNotBlank()) {
+                            TypingDots()
+                        }
+                        if (message.isError) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "出错了，检查设置里的接口地址与 API Key。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+                MessageMenu(
+                    expanded = menu,
+                    onDismiss = { menu = false },
+                    onCopy = { onCopy(message.content) },
+                    onDelete = onDelete,
+                    onRegenerate = onRegenerate
                 )
             }
-            MessageMenu(
-                expanded = menu,
-                onDismiss = { menu = false },
-                onCopy = { onCopy(message.content) },
-                onDelete = onDelete,
-                onRegenerate = null
-            )
-        }
-
-        ROLE_ASSISTANT -> Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .pointerInput(message.id) {
-                    detectTapGestures(onLongPress = { menu = true })
-                }
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    if (message.activities.isNotEmpty()) {
-                        ToolActivityGroup(messageId = message.id, activities = message.activities)
-                        if (message.content.isNotBlank()) Spacer(Modifier.height(8.dp))
-                    }
-                    when {
-                        message.content.isNotBlank() -> MarkdownText(
-                            text = message.content,
-                            onCopyCode = onCopy
-                        )
-
-                        message.streaming && message.activities.isEmpty() -> TypingDots()
-                        message.streaming -> Unit
-                        else -> Text(
-                            text = "（没有内容）",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (message.streaming && message.content.isNotBlank()) {
-                        TypingDots()
-                    }
-                    if (message.isError) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "出错了，检查设置里的接口地址与 API Key。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-            }
-            MessageMenu(
-                expanded = menu,
-                onDismiss = { menu = false },
-                onCopy = { onCopy(message.content) },
-                onDelete = onDelete,
-                onRegenerate = onRegenerate
-            )
+            if (showTimestamp) TimestampLabel(message.timestamp, Alignment.Start)
         }
 
         else -> Unit
     }
 }
 
-/** 工具调用组：单个直接展示，多个先折叠，点开看每一次的详情 */
+/** 消息时间：只在设置里打开「显示消息时间」时出现 */
 @Composable
-fun ToolActivityGroup(messageId: String, activities: List<ToolActivity>) {
+private fun TimestampLabel(timestamp: Long, align: Alignment.Horizontal) {
+    val text = remember(timestamp) {
+        val c = java.util.Calendar.getInstance()
+        c.timeInMillis = timestamp
+        String.format(
+            "%02d:%02d",
+            c.get(java.util.Calendar.HOUR_OF_DAY),
+            c.get(java.util.Calendar.MINUTE)
+        )
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 3.dp, start = 6.dp, end = 6.dp),
+        horizontalAlignment = align
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 工具调用组：平时就是一行摘要，点开才看明细。
+ * 折叠方式由设置决定：全部展开 / 只有一个时折叠 / 多个时折叠。
+ */
+@Composable
+fun ToolActivityGroup(
+    messageId: String,
+    activities: List<ToolActivity>,
+    collapseMode: String = COLLAPSE_MULTI
+) {
     if (activities.isEmpty()) return
 
-    if (activities.size == 1) {
-        ToolActivityCard(activities.first())
+    val folded = when (collapseMode) {
+        COLLAPSE_NONE -> false
+        COLLAPSE_SINGLE -> activities.size == 1
+        else -> activities.size > 1
+    }
+
+    if (!folded) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            activities.forEach { ToolActivityCard(it) }
+        }
         return
     }
 
     var open by remember(messageId) { mutableStateOf(false) }
     val running = activities.count { it.status == ACT_RUNNING }
     val failed = activities.count { it.status == ACT_ERROR }
+    val names = activities.map { it.label.ifBlank { it.name } }.distinct().take(3).joinToString("、")
+    val tone = when {
+        failed > 0 -> statusColor(ACT_ERROR)
+        running > 0 -> statusColor(ACT_RUNNING)
+        else -> statusColor(ACT_DONE)
+    }
     val summary = when {
-        running > 0 -> "正在执行 ${activities.size} 个工具…"
-        failed > 0 -> "调用了 ${activities.size} 个工具（${failed} 个失败）"
+        running > 0 -> "正在执行 ${activities.size} 个工具"
+        failed > 0 -> "调用了 ${activities.size} 个工具 · ${failed} 个失败"
         else -> "调用了 ${activities.size} 个工具"
     }
 
-    Surface(
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-        shape = RoundedCornerShape(10.dp),
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
             .pointerInput(messageId) {
                 detectTapGestures(onTap = { open = !open })
             }
+            .padding(horizontal = 9.dp, vertical = 7.dp)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("🛠", fontSize = 13.sp)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = summary,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = if (open) "收起" else "展开",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (open) {
-                Spacer(Modifier.height(8.dp))
-                activities.forEachIndexed { index, a ->
-                    if (index > 0) Spacer(Modifier.height(6.dp))
-                    ToolActivityCard(a)
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(tone)
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (open) "收起" else "展开",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (names.isNotEmpty()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = names,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (open) {
+            Spacer(Modifier.height(7.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                activities.forEach { ToolActivityCard(it) }
             }
         }
     }
 }
 
-/** 单次工具调用：名称 + 参数 + 结果，点一下展开完整结果 */
+/** 单次工具调用：状态点 + 名称一行，参数一行，结果三行；点一下看全部 */
 @Composable
 fun ToolActivityCard(activity: ToolActivity) {
-    var showArgs by remember(activity.id) { mutableStateOf(false) }
-    var showResult by remember(activity.id) { mutableStateOf(false) }
-    val hasResult = activity.result.isNotBlank()
-    val argText = activity.arguments.trim()
-    val showArgBlock = argText.isNotEmpty() && argText != "{}" && argText != "null"
+    var open by remember(activity.id) { mutableStateOf(false) }
+    val title = activity.label.ifBlank { activity.name }
+    val argText = activity.arguments.trim().let { if (it == "{}" || it == "null") "" else it }
+    val result = activity.result.trim()
+    val expandable = result.length > 160 || result.count { it == '\n' } > 2 || argText.length > 90
 
-    Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-        shape = RoundedCornerShape(10.dp),
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
             .pointerInput(activity.id) {
-                detectTapGestures(onTap = {
-                    if (hasResult) showResult = !showResult else showArgs = !showArgs
-                })
+                detectTapGestures(onTap = { open = !open })
             }
+            .padding(horizontal = 9.dp, vertical = 7.dp)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(statusColor(activity.status))
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = "🛠 " + activity.label.ifBlank { activity.name },
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = statusText(activity.status),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = statusColor(activity.status)
-                )
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(statusColor(activity.status))
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = statusText(activity.status),
+                style = MaterialTheme.typography.labelSmall,
+                color = statusColor(activity.status)
+            )
+        }
 
-            if (showArgBlock) {
-                Spacer(Modifier.height(4.dp))
+        if (argText.isNotEmpty()) {
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = argText,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = if (open) 8 else 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        when {
+            result.isNotEmpty() -> {
+                Spacer(Modifier.height(3.dp))
                 Text(
-                    text = if (showResult) argText else argText.take(120),
-                    style = MaterialTheme.typography.labelSmall,
+                    text = if (open) result else previewOf(result),
+                    style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = if (showResult) 12 else 2
+                    maxLines = if (open) 400 else 3,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (!hasResult && argText.length > 120) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = if (showArgs) "收起参数" else "展开完整参数",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
             }
 
-            when {
-                hasResult -> {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = if (showResult) activity.result else previewOf(activity.result),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = if (showResult) 400 else 4
-                    )
-                    if (activity.result.length > 140) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = if (showResult) "收起结果" else "展开完整结果",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-
-                activity.status == ACT_RUNNING -> {
-                    Spacer(Modifier.height(4.dp))
-                    TypingDots()
-                }
+            activity.status == ACT_RUNNING -> {
+                Spacer(Modifier.height(3.dp))
+                TypingDots()
             }
+        }
+
+        if (expandable) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = if (open) "收起" else "展开全部",
+                style = MaterialTheme.typography.labelSmall,
+                color = BrandBlue
+            )
         }
     }
 }

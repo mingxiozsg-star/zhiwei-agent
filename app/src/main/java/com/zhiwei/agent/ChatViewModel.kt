@@ -26,8 +26,10 @@ import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_TOOL
 import com.zhiwei.agent.data.ROLE_USER
 import com.zhiwei.agent.data.SettingsStore
+import com.zhiwei.agent.data.StatsStore
 import com.zhiwei.agent.data.ToolActivity
 import com.zhiwei.agent.data.ToolCall
+import com.zhiwei.agent.data.UsageSnapshot
 import com.zhiwei.agent.net.ChatApi
 import com.zhiwei.agent.net.ChatEvent
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +64,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val memoryStore = MemoryStore(app)
     private val knowledgeStore = KnowledgeStore(app)
     private val pluginStore = PluginStore(app)
+    private val statsStore = StatsStore(app)
     private val api = ChatApi()
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
@@ -105,6 +108,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _memoryBusy = MutableStateFlow(false)
     val memoryBusy: StateFlow<Boolean> = _memoryBusy.asStateFlow()
+    /** 本机累计用量，只记服务端返回的 usage */
+    private val _usage = MutableStateFlow(UsageSnapshot())
+    val usage: StateFlow<UsageSnapshot> = _usage.asStateFlow()
+    /** 密钥池批量测活结果：Key -> 结论 */
+    private val _keyTests = MutableStateFlow<Map<String, String>>(emptyMap())
+    val keyTests: StateFlow<Map<String, String>> = _keyTests.asStateFlow()
+    private val _keyTesting = MutableStateFlow(false)
+    val keyTesting: StateFlow<Boolean> = _keyTesting.asStateFlow()
+    private val statsLock = Any()
 
     private var runJob: Job? = null
 
@@ -128,6 +140,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _memories.value = withContext(Dispatchers.IO) { memoryStore.load() }
             _knowledge.value = withContext(Dispatchers.IO) { knowledgeStore.load() }
             _plugins.value = withContext(Dispatchers.IO) { pluginStore.load() }
+            _usage.value = withContext(Dispatchers.IO) { statsStore.load() }
         }
     }
 
@@ -256,6 +269,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     _messages.value.map { if (it.streaming) it.copy(streaming = false) else it },
                     persist = true
                 )
+                notifyIfEnabled()
             }
         }
     }
@@ -276,13 +290,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val query = _messages.value.lastOrNull { it.role == ROLE_USER }?.content ?: ""
         val effective = if (settings.injectContext) injectContext(settings, query) else settings
         var round = 0
-
+        var pendingUsage: ChatEvent.Usage? = null
+        // 同一次提问里，同参数的工具只真跑一遍；模型再要就复用结果，不重复执行
+        val seenCalls = HashMap<String, String>()
         while (true) {
             var calls: List<ToolCall> = emptyList()
             var failure: String? = null
             val base = text.toString()
             val roundText = StringBuilder()
-            val history = _messages.value.filter { it.id != placeholder.id }
+            val snapshot = _messages.value
+            // 本回合前面几轮已经跑过的工具调用必须带进历史，否则模型看不到结果，
+            // 会以为工具没生效，一遍遍重调同一个工具。
+            val history = buildList {
+                addAll(snapshot.filter { it.id != placeholder.id })
+                snapshot.firstOrNull { it.id == placeholder.id }?.let { cur ->
+                    if (cur.activities.isNotEmpty() || base.isNotBlank()) {
+                        add(cur.copy(streaming = false))
+                    }
+                }
+            }
 
             api.streamChat(effective, history, tools) { event ->
                 when (event) {
@@ -294,9 +320,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
 
                     is ChatEvent.ToolCalls -> calls = event.calls
+                    is ChatEvent.Usage -> pendingUsage = event
                     is ChatEvent.Failure -> failure = event.message
                     ChatEvent.Completed -> Unit
                 }
+            }
+            pendingUsage?.let { u ->
+                recordUsage(effective.model, u.prompt, u.completion)
+                pendingUsage = null
             }
 
             if (failure != null) {
@@ -324,6 +355,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             calls.forEach { call ->
                 val label = ToolRegistry.labelFor(env, call.name)
+                val memoKey = call.name + "\u0000" + call.arguments.trim()
+                val cached = seenCalls[memoKey]
                 replaceLocal(placeholder.id) { msg ->
                     msg.copy(
                         activities = msg.activities + ToolActivity(
@@ -331,11 +364,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             name = call.name,
                             label = label,
                             arguments = call.arguments,
-                            status = ACT_RUNNING
+                            result = if (cached == null) "" else replayNote(cached),
+                            status = if (cached == null) ACT_RUNNING else ACT_DONE,
+                            finishedAt = if (cached == null) 0L else System.currentTimeMillis()
                         )
                     )
                 }
+                if (cached != null) return@forEach
                 val outcome = ToolRegistry.execute(env, call.name, call.arguments)
+                seenCalls[memoKey] = outcome.text
                 outcome.newMemory?.let { addMemoryItem(it, persist = true) }
                 outcome.newKnowledge?.let { addKnowledgeItem(it, persist = true) }
                 val failed = outcome.text.startsWith("工具执行失败")
@@ -362,6 +399,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         persistNow()
         maybeExtractMemory()
     }
+
+    /** 同一次提问里重复调用同一工具（参数也一样）时，直接复用上次结果，不真跑第二遍 */
+    private fun replayNote(result: String): String =
+        "（同一次提问里已经用同样的参数调用过，这次直接复用上次结果）\n$result"
 
     private fun ensureConversation() {
         val id = _currentId.value
@@ -464,8 +505,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         _memoryBusy.value = true
         try {
+            val extraRules = settings.memoryExtractRules.trim()
             val extractSettings = settings.copy(
-                systemPrompt = EXTRACT_PROMPT,
+                systemPrompt = if (extraRules.isEmpty()) EXTRACT_PROMPT
+                else EXTRACT_PROMPT + "\n附加规则：\n" + extraRules,
                 streamOutput = false,
                 model = if (settings.extractModel.isNotBlank()) settings.extractModel else settings.model,
                 maxTokens = 600
@@ -475,8 +518,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 listOf(ChatMessage(role = ROLE_USER, content = convo)),
                 emptyList()
             )
-            result.onSuccess { (content, _) ->
-                parseMemories(content).forEach { addMemoryItem(it, persist = false) }
+            result.onSuccess { r ->
+                recordUsage(extractSettings.model, r.promptTokens, r.completionTokens)
+                parseMemories(r.content).forEach { addMemoryItem(it, persist = false) }
                 persistMemories()
             }
         } catch (_: Exception) {
@@ -726,6 +770,60 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearNotice() {
         _notice.value = null
+    }
+    // ---------- 用量统计 ----------
+    /** 只记服务端真实返回的 token，不做本地估算 */
+    private fun recordUsage(model: String, prompt: Int, completion: Int) {
+        if (prompt <= 0 && completion <= 0) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val next = synchronized(statsLock) {
+                statsStore.add(_usage.value, model.ifBlank { "未知模型" }, prompt, completion)
+            }
+            _usage.value = next
+        }
+    }
+
+    fun resetStats() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val empty = synchronized(statsLock) { statsStore.reset() }
+            _usage.value = empty
+        }
+        _notice.value = "用量统计已清零"
+    }
+    // ---------- 密钥池 ----------
+    /** 逐个跑一遍密钥池，把可用性写进 keyTests */
+    fun testKeys() {
+        if (_keyTesting.value) return
+        val s = _settings.value
+        val keys = s.usableKeys()
+        if (keys.isEmpty()) {
+            _notice.value = "密钥池是空的，先填几个 Key"
+            return
+        }
+        viewModelScope.launch {
+            _keyTesting.value = true
+            val acc = LinkedHashMap<String, String>()
+            keys.forEach { k ->
+                acc[k] = "测试中…"
+                _keyTests.value = LinkedHashMap(acc)
+                val r = api.testKey(s, k)
+                acc[k] = r.getOrElse { it.message ?: "不可用" }
+                _keyTests.value = LinkedHashMap(acc)
+            }
+            _keyTesting.value = false
+            val ok = acc.values.count { it == "可用" }
+            _notice.value = "密钥池测完了：可用 $ok / ${keys.size}"
+        }
+    }
+    fun clearKeyTests() {
+        _keyTests.value = emptyMap()
+    }
+    /** 开了「回复完成提醒」就弹一条通知 */
+    private fun notifyIfEnabled() {
+        if (!_settings.value.notifyOnDone) return
+        val text = _messages.value.lastOrNull { it.role == ROLE_ASSISTANT }?.content.orEmpty()
+        val brief = text.replace('\n', ' ').trim().take(60).ifBlank { "已生成回复" }
+        Notifier.notifyDone(getApplication(), "知微回答完毕", brief)
     }
 
     // ---------- 终端 ----------

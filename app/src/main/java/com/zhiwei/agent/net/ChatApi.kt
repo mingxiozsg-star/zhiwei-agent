@@ -1,11 +1,11 @@
 package com.zhiwei.agent.net
 
+import com.zhiwei.agent.agent.ToolSpec
 import com.zhiwei.agent.data.AppSettings
 import com.zhiwei.agent.data.ChatMessage
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_TOOL
 import com.zhiwei.agent.data.ToolCall
-import com.zhiwei.agent.agent.ToolSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -17,18 +17,28 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** 流式对话过程中产生的事件 */
 sealed class ChatEvent {
     data class Delta(val text: String) : ChatEvent()
     data class ToolCalls(val calls: List<ToolCall>) : ChatEvent()
+    data class Usage(val prompt: Int, val completion: Int) : ChatEvent()
     data class Failure(val message: String) : ChatEvent()
     object Completed : ChatEvent()
 }
 
+/** 一次非流式请求的结果 */
+data class ChatResult(
+    val content: String,
+    val toolCalls: List<ToolCall>,
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0
+)
+
 /**
- * OpenAI 兼容协议的流式客户端。
- * 支持 /v1/chat/completions 的 SSE 增量返回与 function calling。
+ * OpenAI 兼容协议的客户端。
+ * 支持 /v1/chat/completions 的 SSE 增量返回、function calling 与多 Key 轮换。
  */
 class ChatApi {
 
@@ -42,6 +52,9 @@ class ChatApi {
     @Volatile
     private var activeCall: Call? = null
 
+    /** 密钥池轮换用的游标 */
+    private val rotation = AtomicInteger(0)
+
     fun cancel() {
         try {
             activeCall?.cancel()
@@ -50,15 +63,24 @@ class ChatApi {
         activeCall = null
     }
 
-    /** 非流式备用通道，用于个别不支持 stream 的服务端 */
+    /** 取一个要用的 Key：开启轮换时按顺序取，否则固定用第一个 */
+    fun pickKey(s: AppSettings): String {
+        val keys = s.usableKeys()
+        if (keys.isEmpty()) return ""
+        if (!s.keyRotation || keys.size == 1) return keys.first()
+        val i = rotation.getAndIncrement()
+        return keys[Math.floorMod(i, keys.size)]
+    }
+
+    /** 非流式备用通道，用于记忆抽取、总结等一次性请求 */
     suspend fun chatOnce(
         settings: AppSettings,
         history: List<ChatMessage>,
         tools: List<ToolSpec>
-    ): Result<Pair<String, List<ToolCall>>> = withContext(Dispatchers.IO) {
+    ): Result<ChatResult> = withContext(Dispatchers.IO) {
         try {
             val body = buildBody(settings, history, tools, stream = false)
-            val request = buildRequest(settings, body)
+            val request = buildRequest(settings, body, pickKey(settings))
             val call = client.newCall(request)
             activeCall = call
             call.execute().use { resp ->
@@ -70,7 +92,15 @@ class ChatApi {
                 val msg = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
                 val content = if (msg == null || msg.isNull("content")) "" else msg.optString("content", "")
                 val calls = parseToolCalls(msg?.optJSONArray("tool_calls"))
-                Result.success(content to calls)
+                val usage = json.optJSONObject("usage")
+                Result.success(
+                    ChatResult(
+                        content = content,
+                        toolCalls = calls,
+                        promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
+                        completionTokens = usage?.optInt("completion_tokens", 0) ?: 0
+                    )
+                )
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -91,7 +121,7 @@ class ChatApi {
         onEvent: (ChatEvent) -> Unit
     ) = withContext(Dispatchers.IO) {
         val body = buildBody(settings, history, tools, stream = true)
-        val request = buildRequest(settings, body)
+        val request = buildRequest(settings, body, pickKey(settings))
         val call = client.newCall(request)
         activeCall = call
         try {
@@ -119,14 +149,17 @@ class ChatApi {
                     } catch (_: Exception) {
                         continue
                     }
+                    // 有的网关会把用量塞在最后一个 chunk 里
+                    json.optJSONObject("usage")?.let { u ->
+                        val p = u.optInt("prompt_tokens", 0)
+                        val c = u.optInt("completion_tokens", 0)
+                        if (p > 0 || c > 0) onEvent(ChatEvent.Usage(p, c))
+                    }
                     val delta = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
                         ?: continue
                     if (!delta.isNull("content")) {
                         val piece = delta.optString("content", "")
                         if (piece.isNotEmpty()) onEvent(ChatEvent.Delta(piece))
-                    }
-                    if (!delta.isNull("reasoning_content")) {
-                        // 部分推理模型会返回思考过程，这里忽略，避免污染正文
                     }
                     val tcs = delta.optJSONArray("tool_calls")
                     if (tcs != null) {
@@ -180,21 +213,16 @@ class ChatApi {
     suspend fun listModels(settings: AppSettings): Result<List<String>> =
         withContext(Dispatchers.IO) {
             try {
+                val key = pickKey(settings)
                 val request = Request.Builder()
                     .url(settings.modelsEndpoint())
-                    .apply {
-                        if (settings.apiKey.isNotBlank()) {
-                            header("Authorization", "Bearer ${settings.apiKey}")
-                        }
-                    }
+                    .apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }
                     .get()
                     .build()
                 client.newCall(request).execute().use { resp ->
                     val text = resp.body?.string() ?: ""
                     if (!resp.isSuccessful) {
-                        return@withContext Result.failure(
-                            IOException(describeHttpError(resp.code, text))
-                        )
+                        return@withContext Result.failure(IOException(describeHttpError(resp.code, text)))
                     }
                     val arr = JSONObject(text).optJSONArray("data") ?: JSONArray()
                     val out = mutableListOf<String>()
@@ -210,19 +238,48 @@ class ChatApi {
             }
         }
 
+    /** 用指定 Key 发一个最小请求，验证它是否可用 */
+    suspend fun testKey(settings: AppSettings, key: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url(settings.modelsEndpoint())
+                    .apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }
+                    .get()
+                    .build()
+                client.newCall(request).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        Result.success("可用")
+                    } else {
+                        val text = resp.body?.string() ?: ""
+                        val hint = when (resp.code) {
+                            401 -> "Key 无效"
+                            403 -> "无权限"
+                            429 -> "额度用尽或限流"
+                            else -> "HTTP ${resp.code}"
+                        }
+                        val extra = text.trim().take(120)
+                        Result.failure(IOException(if (extra.isEmpty()) hint else "$hint：$extra"))
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
     private class ToolCallBuilder {
         var id: String = ""
         var name: String = ""
         val args = StringBuilder()
     }
 
-    private fun buildRequest(settings: AppSettings, body: String): Request {
+    private fun buildRequest(settings: AppSettings, body: String, key: String): Request {
         val builder = Request.Builder()
             .url(settings.endpoint())
             .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .header("Accept", if (settings.streamOutput) "text/event-stream" else "application/json")
-        if (settings.apiKey.isNotBlank()) {
-            builder.header("Authorization", "Bearer ${settings.apiKey}")
+        if (key.isNotBlank()) {
+            builder.header("Authorization", "Bearer $key")
         }
         if (settings.baseUrl.contains("openrouter.ai")) {
             builder.header("HTTP-Referer", "https://github.com/mingxiozsg-star/zhiwei-agent")
@@ -242,8 +299,11 @@ class ChatApi {
         root.put("messages", buildMessages(settings, history))
         if (stream) root.put("stream", true)
         root.put("temperature", settings.temperature.toDouble())
+        if (settings.topP < 1.0f) root.put("top_p", settings.topP.toDouble())
+        if (settings.frequencyPenalty != 0f) root.put("frequency_penalty", settings.frequencyPenalty.toDouble())
+        if (settings.presencePenalty != 0f) root.put("presence_penalty", settings.presencePenalty.toDouble())
         if (settings.maxTokens > 0) root.put("max_tokens", settings.maxTokens)
-        if (tools.isNotEmpty()) {
+        if (tools.isNotEmpty() && settings.nativeToolCall) {
             root.put("tools", JSONArray().apply { tools.forEach { put(it.toJson()) } })
             root.put("tool_choice", "auto")
         }
@@ -251,11 +311,18 @@ class ChatApi {
     }
 
     private fun buildMessages(settings: AppSettings, history: List<ChatMessage>): JSONArray {
+        var keep = history
+        val limit = settings.contextLimit
+        if (limit > 0 && keep.size > limit) {
+            keep = keep.takeLast(limit)
+            // 协议要求 tool 消息前面必须有对应的 assistant 调用，别让历史从孤立的 tool 开始
+            while (keep.isNotEmpty() && keep.first().role == ROLE_TOOL) keep = keep.drop(1)
+        }
         val arr = JSONArray()
         if (settings.systemPrompt.isNotBlank()) {
             arr.put(JSONObject().put("role", "system").put("content", settings.systemPrompt))
         }
-        history.forEach { m ->
+        keep.forEach { m ->
             when (m.role) {
                 ROLE_ASSISTANT -> {
                     val acts = m.activities

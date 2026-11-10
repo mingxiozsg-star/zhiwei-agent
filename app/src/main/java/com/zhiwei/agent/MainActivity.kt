@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -96,7 +97,12 @@ fun ZhiweiApp(vm: ChatViewModel) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.1.0"
+        }.getOrNull() ?: "1.2.0"
+    }
+
+    val view = LocalView.current
+    LaunchedEffect(settings.keepScreenOn) {
+        view.keepScreenOn = settings.keepScreenOn
     }
 
     LaunchedEffect(notice) {

@@ -10,15 +10,21 @@
 
 ### 功能
 
-- **对话**：兼容 OpenAI / DeepSeek / OpenRouter / 各类中转站 / 本地 Ollama 等 `/v1/chat/completions` 接口，支持流式输出与随时中断
+- **对话**：兼容 OpenAI / DeepSeek / OpenRouter / 各类中转站 / 本地 Ollama 等 `/v1/chat/completions` 接口，支持流式输出与随时中断，一回合只占一条消息，工具调用内嵌其中
+- **密钥池**：一行一个 Key，可自动轮换；一键逐个测活，Key 无效 / 无权限 / 额度用尽分开提示
 - **工具调用**：内置 8 个工具，模型可按需自行调用
   - 当前时间、计算器、设备信息（机型/系统/电量/内存）、读剪贴板
   - 打开链接、抓取网页正文、联网搜索（需自备 Tavily Key）
   - 终端命令（默认关闭，开启后模型可在应用沙箱内执行 shell）
+- **记忆库**：聊完自动沉淀长期事实，新对话自动带上；可手动增删置顶，也能按需重抽
+- **知识库**：粘贴正文或只给网址自动抓取，回答时按段引用
+- **自定义插件**：HTTP 接口 / 本机命令 / MCP 工具三种，导入后可先试跑
+- **用量统计**：只记服务端返回的 token，按模型分账，全部留在本机，可随时清零
 - **终端**：独立的终端页，快捷命令一键填入，输出实时滚动
 - **会话**：多会话、重命名、删除、导出 Markdown、长按消息复制或重新生成
+- **设置**：接口与密钥池、智能体、记忆与知识、生成参数（温度/Top-P/频率惩罚/存在惩罚/最大长度）、外观（主题、字号缩放、抽屉宽度）、显示与行为（工具折叠方式、消息时间、屏幕常亮、完成提醒、发送震动）
 - **外观**：樱粉×冰蓝配色，跟随系统 / 浅色 / 深色三态切换
-- **隐私**：不经过任何第三方中转服务器，会话只落在 `filesDir/conversations.json`
+- **隐私**：不经过任何第三方中转服务器，会话只落在 `filesDir/conversations.json`，用量只落在 `filesDir/stats.json`
 
 ### 安装
 
@@ -57,15 +63,21 @@ An AI agent that lives in your phone. Point it at any OpenAI-compatible endpoint
 
 ### Features
 
-- **Chat** — works with OpenAI / DeepSeek / OpenRouter / relay services / local Ollama via `/v1/chat/completions`, with streaming output and instant stop
+- **Chat** — works with OpenAI / DeepSeek / OpenRouter / relay services / local Ollama via `/v1/chat/completions`, with streaming output and instant stop. One turn takes one message, tool calls inline
+- **Key pool** — one key per line, optionally rotating; test them all in one tap, with invalid / unauthorised / quota-exhausted told apart
 - **Tool calling** — 8 built-in tools the model can invoke on its own
   - current time, calculator, device info (model / OS / battery / memory), read clipboard
   - open URL, fetch page text, web search (bring your own Tavily key)
   - shell command (off by default; when enabled the model may run shell inside the app sandbox)
+- **Memory** — long-term facts distilled from your chats and carried into new conversations; add, edit, pin or re-extract at will
+- **Knowledge** — paste text or just hand it a URL; answers cite the matching paragraphs
+- **Plugins** — HTTP endpoint, local command or MCP tool; test-run before enabling
+- **Usage stats** — counts only what the server reports, broken down per model, stored on device, clearable anytime
 - **Terminal** — dedicated tab, quick commands, live scrolling output
 - **Sessions** — multiple conversations, rename, delete, export Markdown, long-press to copy or regenerate
+- **Settings** — endpoint and key pool, agent, memory and knowledge, generation (temperature / Top-P / penalties / max length), appearance (theme, font scale, drawer width), display and behaviour (tool-call folding, message time, keep screen on, finish notification, haptic on send)
 - **Look** — sakura pink × ice blue theme, system / light / dark modes
-- **Privacy** — no third-party relay server; conversations live in `filesDir/conversations.json`
+- **Privacy** — no third-party relay server; conversations in `filesDir/conversations.json`, usage in `filesDir/stats.json`
 
 ### Install
 

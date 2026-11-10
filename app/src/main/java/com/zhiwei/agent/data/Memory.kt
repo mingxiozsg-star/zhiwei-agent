@@ -40,7 +40,7 @@ data class MemoryItem(
                 text = o.optString("text", ""),
                 tags = tags.filter { it.isNotBlank() },
                 source = o.optString("source", "对话"),
-                conversationId = if (o.isNull("conversationId")) null else o.optString("conversationId", null),
+                conversationId = if (o.isNull("conversationId")) null else o.optString("conversationId", "").ifEmpty { null },
                 createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                 pinned = o.optBoolean("pinned", false)
             )
