@@ -1,37 +1,37 @@
-## 知微智能体 v1.2.0
+## 知微智能体 v1.3.0
 
-这一版把设置做细了，重点是「多个 API Key 自动轮换」和「用量统计」。
+这一版加了两块新东西——**设备操控**和**提示词库**，顺手把工具调用和界面收拾了一遍。
 
-**API 密钥池**
+**设备操控：说话就能用**
 
-以前只能填一个 Key，用多了容易被限流。现在设置里多了一块密钥池：一行一个 Key，支持 `#` 开头写注释。
+设置里打开「允许设备操控」，下面这些直接对知微说就行，不用记命令：
 
-打开自动轮换，每次请求按顺序挑下一个用；池子非空时，上面那个单个 Key 会自动忽略。池子里有几个、能用的有几个，一眼就能看到。
+- 「声音小一点」→ 直接改音量，还会把现在的音量报给你
+- 「手电筒打开」→ 开关闪光灯
+- 「屏幕亮一点」→ 调屏幕亮度（第一次用会引导你去开「修改系统设置」权限）
+- 「打开微信」→ 按应用名找并启动，找不到包名就按名字模糊匹配
+- 「震动一下」→ 短震动
+- 「念一下」→ 把回复朗读出来
+- 「把这段复制到剪贴板」「跳到 WiFi 设置」→ 剪贴板与系统设置页
+- 「手机上装了哪些应用」→ 列出可启动的应用，也可以按名字筛
 
-点「测试全部」会逐个打一次最小请求，把结论标在每个 Key 后面——Key 无效、无权限、额度用尽或限流，分开说清楚。截图分享时 Key 只显示前后几位。
+没装、没权限、没手电筒硬件，都会直接说清是哪一种，不糊弄。
 
-**用量统计**
+**提示词库：常用问法点一下就填**
 
-服务端返回多少 token 就记多少，不做本地估算，也不上传。设置页里能看到总请求数、输入和输出 token，下面按模型分开列，最近用的是哪个也标出来。只存在本机，随时可以清零。
+聊天页输入栏左边的 ＋ 现在就是提示词库，点一条直接填进输入框。第一版自带 5 条：总结要点、翻译成中文、润色、写代码、列计划。设置 → 提示词库里能自己增删改，存在本机。提示词里可以写 `{time}` 和 `{model}`，填入时自动替换成当前时间和当前模型名。
 
-**设置改细了**
+**工具调用：预算代替次数上限，一个算式一次算完**
 
-- 生成参数：温度、Top-P、频率惩罚、存在惩罚、最大回复长度，收在可折叠的「生成参数」里
-- 智能体：流式输出、内置工具、原生工具调用（个别网关不吃 `tools` 参数时关掉）、终端命令开关、插件开关、工具轮次上限，新增「每次带上的历史消息条数」
-- 记忆与知识：多了「抽取附加规则」，可以写「别记日程类临时信息」这类要求，会拼进抽取提示词
-- 显示与行为：工具调用折叠方式（全部展开 / 只有一个时折叠 / 多个时折叠）、显示消息时间、屏幕常亮、回复完成提醒、发送震动
-- 外观：主题三选，字号缩放 0.8×–1.6×，抽屉宽度可调
-- 端口与生成分开摆，一眼能找到要改的那一项
+- 时间、计算、设备信息、记忆检索这类本地只读工具不占预算；只有真动设备的（音量、亮度、开应用、上网抓取等）才计费。默认预算从 4 提到 12。
+- 预算用完了不会把对话掐断，会直接告诉你：回一句「继续」就接着做，或者去设置里把预算调大。
+- 计算器支持一次传多个表达式，批处理比一个一个算快得多。
+- 同一次提问里，同样的工具、同样的参数只真跑一遍，模型再要就复用上次结果。
+- 执行失败的工具会在卡片上标「【执行失败】」，不用点开才知道。
 
-**工具调用修了两处**
+**界面收拾干净了**
 
-以前模型看不到自己刚调用的工具结果，会出现「计算器已经算出来了，它还接着调三次」。现在同一回合里前面几轮跑过的调用和结果会一并带进上下文，模型看到结果就收手；同一次提问里同参数的工具只真跑一遍，重复要求直接复用上次结果。
-
-工具卡片也压扁了：状态点 + 工具名一行，参数一行，结果最多三行，点一下才展开全部。多个调用折成一行摘要，展开能看到每个工具的名字。
-
-**顺手修的**
-
-修掉了长期存在的类型推断与废弃图标警告；「回复完成提醒」走系统通知渠道，只在打开开关时才申请通知权限。
+折叠栏的功能入口从两排方块图标改成一列（图标在左、文字在右），不再挤成一团；记忆库、知识库、工具与插件已经在折叠栏里，就从顶栏菜单和输入栏 ＋ 里删掉了，重复的入口只留一处。
 
 **下载**
 - Releases：https://github.com/mingxiozsg-star/zhiwei-agent/releases
@@ -41,39 +41,40 @@
 
 ---
 
-## Zhiwei Agent v1.2.0
+## Zhiwei Agent v1.3.0
 
-This release fleshes out Settings, with two things in front: an API key pool that rotates, and token usage stats.
+Two new things this release — **device control** and a **prompt library** — plus a pass over tool calls and the UI.
 
-**API key pool**
+**Device control: just say it**
 
-Before, there was one key field. Use it enough and you get rate limited. Now there is a pool: one key per line, and lines starting with `#` are comments.
+Turn on "Allow device control" in Settings and the following work by voice or text, no commands to memorise:
 
-Turn on rotation and each request takes the next key in order. When the pool has anything in it, the single key field above is ignored. How many keys you have and how many work is visible at a glance.
+- "Volume down a bit" → changes volume and tells you the new level
+- "Turn on the torch" → toggles the flash
+- "Screen brighter" → adjusts brightness (first time it walks you to the "modify system settings" permission)
+- "Open WeChat" → launches by app name, falling back to a fuzzy name match
+- "Buzz once" → a short vibration
+- "Read it out" → speaks the reply
+- "Copy this to the clipboard", "Jump to Wi-Fi settings"
+- "What apps are installed?" → lists launchable apps, filterable by name
 
-Tap "Test all" and it pings each key once, labelling the result right next to it — invalid key, no permission, quota used up or rate limited are told apart. Keys are masked to a few characters each, so screenshots are safe.
+Missing app, missing permission, no flash hardware — each case says which one it is instead of hand-waving.
 
-**Usage stats**
+**Prompt library: tap to fill**
 
-Whatever the server reports is what gets counted — no local guessing, nothing uploaded. Settings shows total requests, input and output tokens, a per-model breakdown, and which model you used last. It lives on your phone only and can be cleared anytime.
+The ＋ on the left of the chat input is now your prompt library — tap one and it drops into the input box. Five are seeded: summarise, translate to Chinese, polish, write code, make a plan. Add, edit and delete them under Settings → Prompt library; everything stays on device. Use `{time}` and `{model}` inside a prompt and they get filled in with the current time and model name.
 
-**Finer-grained settings**
+**Tool calls: a budget instead of a round cap, and one shot per sum**
 
-- Generation: temperature, Top-P, frequency penalty, presence penalty, max reply length, tucked into a collapsible section
-- Agent: streaming, built-in tools, native tool calls (turn off for gateways that choke on the `tools` parameter), terminal command switch, plugin switch, tool round limit, plus a new "how many past messages to send"
-- Memory & knowledge: a new "extra extraction rules" box — write things like "skip temporary schedule items" and it goes into the extraction prompt
-- Display & behaviour: tool-call folding (always expanded / fold when single / fold when multiple), show message time, keep screen on, notify when a reply finishes, haptic on send
-- Appearance: three theme modes, font scale 0.8×–1.6×, adjustable drawer width
+- Local read-only tools (time, calculator, device info, memory search) are free. Only tools that actually touch the device (volume, brightness, launching apps, fetching pages) count. The default budget goes from 4 to 12.
+- Running out of budget no longer cuts the conversation off. It tells you: reply "continue" and it keeps going, or raise the budget in Settings.
+- The calculator takes several expressions in one call — batch beats one at a time.
+- Within one question, an identical call with identical arguments runs once; repeats reuse the previous result.
+- Failed tools are marked "【执行失败】" on the card, no need to expand to find out.
 
-**Two fixes around tool calls**
+**Cleaner UI**
 
-The model used to lose sight of the result it had just received, which showed up as "the calculator already answered, and it called it three more times". Calls and their results from earlier rounds of the same reply now go back into the context, so the model stops as soon as it has the answer. Within one question, an identical call with identical arguments runs once — repeats reuse the previous result.
-
-Tool cards are flatter too: a status dot and the tool name on one line, arguments on one line, up to three lines of result, and a tap expands everything. Several calls fold into a single summary row that lists the tool names.
-
-**Also fixed**
-
-Cleared out long-standing type-inference and deprecated-icon warnings. The finish notification uses a proper system channel and only asks for permission when you turn it on.
+The drawer's feature entries went from two rows of square icons to a single column (icon left, label right) instead of a pile. Memory, knowledge and plugins already live in the drawer, so their entries were removed from the top-bar menu and the input ＋. Each entry now appears in one place only.
 
 **Download**
 - Releases: https://github.com/mingxiozsg-star/zhiwei-agent/releases

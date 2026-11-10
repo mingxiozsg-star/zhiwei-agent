@@ -1,11 +1,20 @@
 package com.zhiwei.agent.agent
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import android.view.KeyEvent
 import com.zhiwei.agent.data.AppSettings
 import com.zhiwei.agent.data.KnowledgeItem
 import com.zhiwei.agent.data.KnowledgeStore
@@ -24,13 +33,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /** 一个可被模型调用的工具 */
 data class ToolSpec(
     val name: String,
     val label: String,
     val description: String,
-    val parameters: JSONObject
+    val parameters: JSONObject,
+    /** 纯本地只读工具：不消耗每回合的工具预算，省着用不如随便用 */
+    val free: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("type", "function")
@@ -99,6 +111,17 @@ object ToolRegistry {
     const val TOOL_RECALL = "recall"
     const val TOOL_KB_SEARCH = "search_knowledge"
     const val TOOL_KB_SAVE = "save_knowledge"
+    const val TOOL_GET_VOLUME = "get_volume"
+    const val TOOL_SET_VOLUME = "set_volume"
+    const val TOOL_SET_BRIGHTNESS = "set_brightness"
+    const val TOOL_TORCH = "toggle_torch"
+    const val TOOL_VIBRATE = "vibrate"
+    const val TOOL_CLIPBOARD_WRITE = "write_clipboard"
+    const val TOOL_OPEN_SETTING = "open_system_setting"
+    const val TOOL_LIST_APPS = "list_apps"
+    const val TOOL_OPEN_APP = "open_app"
+    const val TOOL_MEDIA = "media_control"
+    const val TOOL_SPEAK = "speak_text"
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -119,28 +142,39 @@ object ToolRegistry {
             TOOL_TIME,
             "当前时间",
             "获取手机当前的日期、时间与星期。",
-            schema()
+            schema(),
+            free = true
         )
 
         list += ToolSpec(
             TOOL_CALC,
             "计算器",
-            "计算一个数学表达式，支持 + - * / % 和括号、小数。",
-            schema("expression" to str("要计算的表达式，例如 (12+8)*3/4"), required = listOf("expression"))
+            "计算数学表达式。可以一次传多个表达式，批处理比一个一个算快得多。支持 + - * / % 和括号、小数。",
+            schema(
+                "expressions" to obj(
+                    "type" to "array",
+                    "description" to "要计算的表达式列表，例如 [\"90000/600\", \"(128+72)*3/8\"]",
+                    "items" to obj("type" to "string")
+                ),
+                "expression" to str("只算一个时用这个字段")
+            ),
+            free = true
         )
 
         list += ToolSpec(
             TOOL_DEVICE,
             "设备信息",
             "获取手机型号、系统版本、电量、内存等信息。",
-            schema()
+            schema(),
+            free = true
         )
 
         list += ToolSpec(
             TOOL_CLIPBOARD,
             "读剪贴板",
             "读取手机剪贴板当前的文本内容。",
-            schema()
+            schema(),
+            free = true
         )
 
         list += ToolSpec(
@@ -172,15 +206,88 @@ object ToolRegistry {
             TOOL_RECALL,
             "回忆",
             "在记忆库里检索以前记下的信息。需要用户偏好、历史事实时先查它。",
-            schema("query" to str("检索关键词"), required = listOf("query"))
+            schema("query" to str("检索关键词"), required = listOf("query")),
+            free = true
         )
 
         list += ToolSpec(
             TOOL_KB_SEARCH,
             "查知识库",
             "在知识库里检索用户导入的资料、笔记、文档片段。",
-            schema("query" to str("检索关键词"), required = listOf("query"))
+            schema("query" to str("检索关键词"), required = listOf("query")),
+            free = true
         )
+
+        if (settings.enableDeviceTools) {
+            list += ToolSpec(
+                TOOL_GET_VOLUME,
+                "查音量",
+                "读取当前的媒体音量与铃声音量（百分比）。",
+                schema(),
+                free = true
+            )
+            list += ToolSpec(
+                TOOL_SET_VOLUME,
+                "调音量",
+                "设置媒体音量，传 0-100 的百分比。用户说「声音小一点/静音」时用它。",
+                schema("percent" to obj("type" to "integer", "description" to "目标音量百分比 0-100"), required = listOf("percent"))
+            )
+            list += ToolSpec(
+                TOOL_SET_BRIGHTNESS,
+                "调亮度",
+                "设置屏幕亮度，传 1-100 的百分比。需要用户在系统设置里给过「修改系统设置」权限。",
+                schema("percent" to obj("type" to "integer", "description" to "目标亮度百分比 1-100"), required = listOf("percent"))
+            )
+            list += ToolSpec(
+                TOOL_TORCH,
+                "手电筒",
+                "打开或关闭手电筒（闪光灯）。用户说「开手电」「关灯」时用它。",
+                schema("on" to obj("type" to "boolean", "description" to "true 打开，false 关闭"), required = listOf("on"))
+            )
+            list += ToolSpec(
+                TOOL_VIBRATE,
+                "震动",
+                "让手机震一下，可指定毫秒数（50-3000）。",
+                schema("duration_ms" to obj("type" to "integer", "description" to "震动时长，默认 300 毫秒"))
+            )
+            list += ToolSpec(
+                TOOL_CLIPBOARD_WRITE,
+                "写剪贴板",
+                "把一段文本放进手机剪贴板，方便用户去别处粘贴。",
+                schema("text" to str("要复制的文本"), required = listOf("text"))
+            )
+            list += ToolSpec(
+                TOOL_OPEN_SETTING,
+                "打开系统设置",
+                "打开系统设置页。page 可选 wifi / bluetooth / display / sound / battery / location / apps / write（修改系统设置权限页），留空则打开设置首页。",
+                schema("page" to str("要打开的设置页，例如 wifi"))
+            )
+            list += ToolSpec(
+                TOOL_LIST_APPS,
+                "列出应用",
+                "列出手机上已安装且可启动的应用，可按名称关键词过滤。用来查某个应用在不在、包名是什么。",
+                schema("keyword" to str("可选，应用名关键词")),
+                free = true
+            )
+            list += ToolSpec(
+                TOOL_OPEN_APP,
+                "打开应用",
+                "按应用名或包名打开一个已安装的应用。",
+                schema("target" to str("应用名（如 微信）或包名（如 com.tencent.mm）"), required = listOf("target"))
+            )
+            list += ToolSpec(
+                TOOL_MEDIA,
+                "媒体控制",
+                "控制正在播放的音乐/视频：play（播放）、pause（暂停）、toggle（播放/暂停）、next（下一首）、previous（上一首）。",
+                schema("action" to str("play / pause / toggle / next / previous"), required = listOf("action"))
+            )
+            list += ToolSpec(
+                TOOL_SPEAK,
+                "朗读",
+                "用系统语音把一段文字读出来，适合用户想「听」答案的时候。",
+                schema("text" to str("要朗读的文字"), required = listOf("text"))
+            )
+        }
 
         list += ToolSpec(
             TOOL_KB_SAVE,
@@ -238,6 +345,17 @@ object ToolRegistry {
         TOOL_RECALL -> "回忆"
         TOOL_KB_SEARCH -> "查知识库"
         TOOL_KB_SAVE -> "存进知识库"
+        TOOL_GET_VOLUME -> "查音量"
+        TOOL_SET_VOLUME -> "调音量"
+        TOOL_SET_BRIGHTNESS -> "调亮度"
+        TOOL_TORCH -> "手电筒"
+        TOOL_VIBRATE -> "震动"
+        TOOL_CLIPBOARD_WRITE -> "写剪贴板"
+        TOOL_OPEN_SETTING -> "打开系统设置"
+        TOOL_LIST_APPS -> "列出应用"
+        TOOL_OPEN_APP -> "打开应用"
+        TOOL_MEDIA -> "媒体控制"
+        TOOL_SPEAK -> "朗读"
         else -> env.pluginList.firstOrNull { it.safeName() == name }?.name ?: name
     }
 
@@ -255,7 +373,7 @@ object ToolRegistry {
                 }
                 when (name) {
                     TOOL_TIME -> ToolOutcome(currentTime())
-                    TOOL_CALC -> ToolOutcome(calculate(args.optString("expression", "")))
+                    TOOL_CALC -> ToolOutcome(calculateMany(args))
                     TOOL_DEVICE -> ToolOutcome(deviceInfo(env.context))
                     TOOL_CLIPBOARD -> ToolOutcome(readClipboard(env.context))
                     TOOL_OPEN_URL -> ToolOutcome(openUrl(env.context, args.optString("url", "")))
@@ -266,6 +384,17 @@ object ToolRegistry {
                     TOOL_RECALL -> ToolOutcome(recall(env, args.optString("query", "")))
                     TOOL_KB_SEARCH -> ToolOutcome(searchKnowledge(env, args.optString("query", "")))
                     TOOL_KB_SAVE -> saveKnowledge(args)
+                    TOOL_GET_VOLUME -> ToolOutcome(volumeInfo(env.context))
+                    TOOL_SET_VOLUME -> ToolOutcome(setVolume(env.context, args.optInt("percent", 50)))
+                    TOOL_SET_BRIGHTNESS -> ToolOutcome(setBrightness(env.context, args.optInt("percent", 60)))
+                    TOOL_TORCH -> ToolOutcome(toggleTorch(env.context, args.optBoolean("on", true)))
+                    TOOL_VIBRATE -> ToolOutcome(vibrate(env.context, args.optInt("duration_ms", 300).toLong()))
+                    TOOL_CLIPBOARD_WRITE -> ToolOutcome(writeClipboard(env.context, args.optString("text", "")))
+                    TOOL_OPEN_SETTING -> ToolOutcome(openSystemSetting(env.context, args.optString("page", "")))
+                    TOOL_LIST_APPS -> ToolOutcome(listApps(env.context, args.optString("keyword", "")))
+                    TOOL_OPEN_APP -> ToolOutcome(openApp(env.context, args.optString("target", "")))
+                    TOOL_MEDIA -> ToolOutcome(mediaControl(env.context, args.optString("action", "")))
+                    TOOL_SPEAK -> ToolOutcome(speak(env.context, args.optString("text", "")))
                     else -> ToolOutcome("未知工具：$name")
                 }
             } catch (e: Exception) {
@@ -399,6 +528,22 @@ object ToolRegistry {
         }
     }
 
+    /** 一次算一批：模型常把好几步运算拆成多次调用，这里一次算完 */
+    private fun calculateMany(args: JSONObject): String {
+        val items = mutableListOf<String>()
+        args.optJSONArray("expressions")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val s = arr.optString(i, "").trim()
+                if (s.isNotEmpty()) items.add(s)
+            }
+        }
+        val one = args.optString("expression", "").trim()
+        if (items.isEmpty() && one.isNotEmpty()) items.add(one)
+        if (items.isEmpty()) return "没有提供表达式"
+        if (items.size == 1) return calculate(items[0])
+        return items.joinToString("\n") { calculate(it) }
+    }
+
     private fun currentTime(): String {
         val now = Date()
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss EEEE", Locale.CHINA)
@@ -498,6 +643,244 @@ object ToolRegistry {
             if (body.isNotEmpty()) append(body) else append("（无输出）")
             append("\n[退出码 ").append(result.exitCode).append(']')
         }
+    }
+
+    // ---------- 设备操控 ----------
+
+    private val ttsLock = Any()
+    private var ttsEngine: TextToSpeech? = null
+    private var ttsReady = false
+    private var ttsPending: String? = null
+
+    private fun audio(context: Context): AudioManager? =
+        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    private fun percentOf(value: Int, max: Int): Int = if (max > 0) value * 100 / max else 0
+
+    private fun volumeInfo(context: Context): String {
+        val am = audio(context) ?: return "音频服务不可用"
+        val mediaMax = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val media = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val ringMax = am.getStreamMaxVolume(AudioManager.STREAM_RING)
+        val ring = am.getStreamVolume(AudioManager.STREAM_RING)
+        return "媒体音量：$media / $mediaMax（${percentOf(media, mediaMax)}%）\n" +
+            "铃声音量：$ring / $ringMax（${percentOf(ring, ringMax)}%）"
+    }
+
+    private fun setVolume(context: Context, percent: Int): String {
+        val am = audio(context) ?: return "音频服务不可用"
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val p = percent.coerceIn(0, 100)
+        val target = (max * p / 100.0).roundToInt().coerceIn(0, max)
+        return try {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            "媒体音量已设为 $p%"
+        } catch (e: Exception) {
+            "调音量失败：${e.message}"
+        }
+    }
+
+    private fun setBrightness(context: Context, percent: Int): String {
+        if (!Settings.System.canWrite(context)) {
+            return "还没有「修改系统设置」权限。去 设置 → 应用 → 知微智能体 → 修改系统设置 打开后再试。"
+        }
+        val p = percent.coerceIn(1, 100)
+        val value = (255 * p / 100.0).roundToInt().coerceIn(1, 255)
+        return try {
+            Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, value)
+            "屏幕亮度已设为 $p%"
+        } catch (e: Exception) {
+            "调亮度失败：${e.message}"
+        }
+    }
+
+    private fun toggleTorch(context: Context, on: Boolean): String {
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            ?: return "相机服务不可用"
+        val id = try {
+            cm.cameraIdList.firstOrNull { c ->
+                cm.getCameraCharacteristics(c).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            }
+        } catch (e: Exception) {
+            null
+        } ?: return "这台设备没有可用的闪光灯"
+        return try {
+            cm.setTorchMode(id, on)
+            if (on) "手电筒已打开" else "手电筒已关闭"
+        } catch (e: Exception) {
+            "手电筒操作失败：${e.message}"
+        }
+    }
+
+    private fun vibrate(context: Context, ms: Long): String {
+        val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            ?: return "设备不支持震动"
+        if (!v.hasVibrator()) return "设备不支持震动"
+        val d = ms.coerceIn(50L, 3000L)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createOneShot(d, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                v.vibrate(d)
+            }
+            "已震动 $d 毫秒"
+        } catch (e: Exception) {
+            "震动失败：${e.message}"
+        }
+    }
+
+    private fun writeClipboard(context: Context, text: String): String {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return "剪贴板不可用"
+        if (text.isBlank()) return "没有要复制的内容"
+        return try {
+            cm.setPrimaryClip(ClipData.newPlainText("知微", text))
+            "已复制到剪贴板（${text.length} 字）"
+        } catch (e: Exception) {
+            "写剪贴板失败：${e.message}"
+        }
+    }
+
+    private fun openSystemSetting(context: Context, page: String): String {
+        val action = when (page.trim().lowercase()) {
+            "wifi", "无线", "无线网络" -> Settings.ACTION_WIFI_SETTINGS
+            "bluetooth", "蓝牙" -> Settings.ACTION_BLUETOOTH_SETTINGS
+            "display", "显示" -> Settings.ACTION_DISPLAY_SETTINGS
+            "sound", "声音" -> Settings.ACTION_SOUND_SETTINGS
+            "battery", "电池" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
+            "location", "位置" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+            "apps", "应用" -> Settings.ACTION_APPLICATION_SETTINGS
+            "write", "修改系统设置" -> Settings.ACTION_MANAGE_WRITE_SETTINGS
+            else -> Settings.ACTION_SETTINGS
+        }
+        return try {
+            val intent = if (action == Settings.ACTION_MANAGE_WRITE_SETTINGS) {
+                Intent(action, Uri.parse("package:" + context.packageName))
+            } else {
+                Intent(action)
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            "已打开系统设置页"
+        } catch (e: Exception) {
+            "打开设置失败：${e.message}"
+        }
+    }
+
+    private fun launchableApps(context: Context): List<android.content.pm.ResolveInfo> = try {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        context.packageManager.queryIntentActivities(intent, 0)
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun listApps(context: Context, keyword: String): String {
+        val pm = context.packageManager
+        val kw = keyword.trim().lowercase()
+        val lines = mutableListOf<String>()
+        val seen = HashSet<String>()
+        for (info in launchableApps(context)) {
+            val activity = info.activityInfo ?: continue
+            val label = try {
+                info.loadLabel(pm).toString()
+            } catch (e: Exception) {
+                ""
+            }
+            if (kw.isNotEmpty() && !label.lowercase().contains(kw) && !activity.packageName.lowercase().contains(kw)) {
+                continue
+            }
+            if (!seen.add(activity.packageName)) continue
+            lines.add("$label（${activity.packageName}）")
+            if (lines.size >= 25) break
+        }
+        return if (lines.isEmpty()) {
+            if (kw.isEmpty()) "没有查到可启动的应用" else "没有名字里带「$keyword」的应用"
+        } else {
+            "找到 ${lines.size} 个：\n" + lines.joinToString("\n")
+        }
+    }
+
+    private fun openApp(context: Context, target: String): String {
+        val pm = context.packageManager
+        val t = target.trim()
+        if (t.isEmpty()) return "没有提供应用名或包名"
+        try {
+            pm.getLaunchIntentForPackage(t)?.let { launch ->
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launch)
+                return "已打开 $t"
+            }
+        } catch (_: Exception) {
+        }
+        val hit = launchableApps(context).firstOrNull { info ->
+            val label = try {
+                info.loadLabel(pm).toString()
+            } catch (e: Exception) {
+                ""
+            }
+            label.contains(t, ignoreCase = true) ||
+                (info.activityInfo?.packageName ?: "").contains(t, ignoreCase = true)
+        } ?: return "没找到叫「$t」的应用，可以先用 list_apps 看一下有什么"
+        val activity = hit.activityInfo ?: return "没找到叫「$t」的应用"
+        return try {
+            val intent = Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+                .setComponent(android.content.ComponentName(activity.packageName, activity.name))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            "已打开「${hit.loadLabel(pm)}」"
+        } catch (e: Exception) {
+            "打开失败：${e.message}"
+        }
+    }
+
+    private fun mediaControl(context: Context, action: String): String {
+        val am = audio(context) ?: return "音频服务不可用"
+        val code = when (action.trim().lowercase()) {
+            "play", "播放", "resume" -> KeyEvent.KEYCODE_MEDIA_PLAY
+            "pause", "暂停" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "toggle", "播放暂停" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            "next", "下一首" -> KeyEvent.KEYCODE_MEDIA_NEXT
+            "previous", "prev", "上一首" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            else -> return "不认识的动作：$action（可用 play / pause / toggle / next / previous）"
+        }
+        return try {
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+            "已发送媒体控制：$action"
+        } catch (e: Exception) {
+            "媒体控制失败：${e.message}"
+        }
+    }
+
+    private fun speak(context: Context, text: String): String {
+        val body = text.trim()
+        if (body.isEmpty()) return "没有要朗读的内容"
+        val app = context.applicationContext
+        val clipped = body.take(2000)
+        synchronized(ttsLock) {
+            val engine = ttsEngine ?: TextToSpeech(app) { status ->
+                synchronized(ttsLock) {
+                    ttsReady = status == TextToSpeech.SUCCESS
+                    if (ttsReady) {
+                        ttsEngine?.language = Locale.CHINA
+                        val pending = ttsPending
+                        ttsPending = null
+                        if (pending != null) {
+                            ttsEngine?.speak(pending, TextToSpeech.QUEUE_FLUSH, null, "zhiwei")
+                        }
+                    }
+                }
+            }.also { ttsEngine = it }
+            if (ttsReady) {
+                ttsPending = null
+                engine.speak(clipped, TextToSpeech.QUEUE_FLUSH, null, "zhiwei")
+            } else {
+                ttsPending = clipped
+            }
+        }
+        return "正在朗读（${body.length} 字）"
     }
 
     fun htmlToText(html: String): String {

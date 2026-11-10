@@ -22,6 +22,8 @@ import com.zhiwei.agent.data.MemoryItem
 import com.zhiwei.agent.data.MemoryStore
 import com.zhiwei.agent.data.PluginStore
 import com.zhiwei.agent.data.PluginTool
+import com.zhiwei.agent.data.PromptStore
+import com.zhiwei.agent.data.PromptTemplate
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_TOOL
 import com.zhiwei.agent.data.ROLE_USER
@@ -65,6 +67,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val knowledgeStore = KnowledgeStore(app)
     private val pluginStore = PluginStore(app)
     private val statsStore = StatsStore(app)
+    private val promptStore = PromptStore(app)
     private val api = ChatApi()
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
@@ -116,6 +119,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val keyTests: StateFlow<Map<String, String>> = _keyTests.asStateFlow()
     private val _keyTesting = MutableStateFlow(false)
     val keyTesting: StateFlow<Boolean> = _keyTesting.asStateFlow()
+    /** 提示词库：聊天页点一下就填进输入框 */
+    private val _prompts = MutableStateFlow<List<PromptTemplate>>(emptyList())
+    val prompts: StateFlow<List<PromptTemplate>> = _prompts.asStateFlow()
     private val statsLock = Any()
 
     private var runJob: Job? = null
@@ -141,7 +147,50 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _knowledge.value = withContext(Dispatchers.IO) { knowledgeStore.load() }
             _plugins.value = withContext(Dispatchers.IO) { pluginStore.load() }
             _usage.value = withContext(Dispatchers.IO) { statsStore.load() }
+            _prompts.value = withContext(Dispatchers.IO) { promptStore.load() }
         }
+    }
+
+    // ---------- 提示词库 ----------
+
+    fun addPrompt(title: String, text: String) {
+        val t = title.trim()
+        val body = text.trim()
+        if (body.isEmpty()) {
+            _notice.value = "提示词内容不能为空"
+            return
+        }
+        val item = PromptTemplate(title = t.ifBlank { body.take(8) }, text = body)
+        savePrompts(_prompts.value + item)
+        _notice.value = "已添加快捷短语「${item.title}」"
+    }
+
+    fun updatePrompt(id: String, title: String, text: String) {
+        val body = text.trim()
+        if (body.isEmpty()) {
+            _notice.value = "提示词内容不能为空"
+            return
+        }
+        savePrompts(
+            _prompts.value.map {
+                if (it.id == id) it.copy(title = title.trim().ifBlank { body.take(8) }, text = body) else it
+            }
+        )
+    }
+
+    fun deletePrompt(id: String) {
+        savePrompts(_prompts.value.filter { it.id != id })
+    }
+
+    fun resetPrompts() {
+        _prompts.value = emptyList()
+        viewModelScope.launch(Dispatchers.IO) { promptStore.save(emptyList()) }
+        _notice.value = "提示词库已清空"
+    }
+
+    private fun savePrompts(list: List<PromptTemplate>) {
+        _prompts.value = list
+        viewModelScope.launch(Dispatchers.IO) { promptStore.save(list) }
     }
 
     // ---------- 会话管理 ----------
@@ -289,8 +338,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val text = StringBuilder()
         val query = _messages.value.lastOrNull { it.role == ROLE_USER }?.content ?: ""
         val effective = if (settings.injectContext) injectContext(settings, query) else settings
-        var round = 0
+        var budgetUsed = 0
         var pendingUsage: ChatEvent.Usage? = null
+        // 本地只读工具（时间、计算器、设备信息、记忆检索…）免费，不占预算
+        val freeTools = tools.filter { it.free }.map { it.name }.toSet()
         // 同一次提问里，同参数的工具只真跑一遍；模型再要就复用结果，不重复执行
         val seenCalls = HashMap<String, String>()
         while (true) {
@@ -347,11 +398,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             if (calls.isEmpty()) break
 
-            if (round >= settings.toolMaxRounds) {
-                text.append("\n\n（已达到工具调用轮次上限 ${settings.toolMaxRounds} 轮，先停在这里）")
+            val cost = calls.count { it.name !in freeTools }
+            if (budgetUsed > 0 && budgetUsed + cost > settings.toolMaxRounds) {
+                text.append(
+                    "\n\n（这一回合的工具预算用完了：${settings.toolMaxRounds} 次。回一句「继续」我就接着往下做，" +
+                        "或者去设置里把「每回合工具预算」调大。）"
+                )
                 replaceLocal(placeholder.id) { it.copy(content = text.toString()) }
                 break
             }
+            budgetUsed += cost
 
             calls.forEach { call ->
                 val label = ToolRegistry.labelFor(env, call.name)
@@ -381,7 +437,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         activities = msg.activities.map {
                             if (it.callId == call.id) {
                                 it.copy(
-                                    result = outcome.text,
+                                    result = if (failed) "【执行失败】$outcome.text" else outcome.text,
                                     status = if (failed) ACT_ERROR else ACT_DONE,
                                     finishedAt = System.currentTimeMillis()
                                 )
@@ -392,7 +448,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
-            round++
         }
 
         replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = false) }

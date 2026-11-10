@@ -32,6 +32,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +65,9 @@ import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,6 +83,7 @@ fun ChatScreen(
     val settings by vm.settings.collectAsState()
     val memories by vm.memories.collectAsState()
     val knowledge by vm.knowledge.collectAsState()
+    val prompts by vm.prompts.collectAsState()
 
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -137,9 +142,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { vm.newConversation() }) {
-                        Icon(Icons.Default.Add, contentDescription = "新对话")
-                    }
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "更多")
@@ -148,27 +150,6 @@ fun ChatScreen(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("记忆库") },
-                                onClick = {
-                                    menuOpen = false
-                                    onNavigate(AppScreen.MEMORY)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("知识库") },
-                                onClick = {
-                                    menuOpen = false
-                                    onNavigate(AppScreen.KNOWLEDGE)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("工具与插件") },
-                                onClick = {
-                                    menuOpen = false
-                                    onNavigate(AppScreen.PLUGINS)
-                                }
-                            )
                             DropdownMenuItem(
                                 text = { Text("重命名会话") },
                                 onClick = {
@@ -206,13 +187,6 @@ fun ChatScreen(
                                 onClick = {
                                     menuOpen = false
                                     vm.clearMessages()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("删除会话") },
-                                onClick = {
-                                    menuOpen = false
-                                    currentId?.let { vm.deleteConversation(it) }
                                 }
                             )
                         }
@@ -279,23 +253,50 @@ fun ChatScreen(
                         ) {
                             Icon(
                                 Icons.Default.Add,
-                                contentDescription = "更多",
+                                contentDescription = "提示词与更多",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         DropdownMenu(expanded = plusOpen, onDismissRequest = { plusOpen = false }) {
+                            if (prompts.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("提示词库还是空的") },
+                                    enabled = false,
+                                    onClick = {}
+                                )
+                            }
+                            prompts.forEach { p ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = p.title,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    onClick = {
+                                        plusOpen = false
+                                        val now = SimpleDateFormat(
+                                            "yyyy-MM-dd HH:mm EEEE",
+                                            Locale.getDefault()
+                                        ).format(Date())
+                                        val body = p.text
+                                            .replace("{time}", now)
+                                            .replace("{model}", settings.model)
+                                        input = if (input.isBlank()) {
+                                            body
+                                        } else {
+                                            input.trimEnd() + "\n" + body
+                                        }
+                                    }
+                                )
+                            }
+                            HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text("打开终端") },
+                                text = { Text("管理提示词") },
                                 onClick = {
                                     plusOpen = false
-                                    onNavigate(AppScreen.TERMINAL)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("看看记忆库") },
-                                onClick = {
-                                    plusOpen = false
-                                    onNavigate(AppScreen.MEMORY)
+                                    onNavigate(AppScreen.SETTINGS)
                                 }
                             )
                             DropdownMenuItem(

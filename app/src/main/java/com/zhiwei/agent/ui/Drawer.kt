@@ -1,5 +1,6 @@
 package com.zhiwei.agent.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -89,52 +91,43 @@ fun ConversationDrawer(
 
         Spacer(Modifier.height(10.dp))
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            NavTile(
-                icon = Icons.Default.Home,
-                label = "对话",
-                selected = screen == AppScreen.CHAT,
-                onClick = { onNavigate(AppScreen.CHAT) },
-                modifier = Modifier.weight(1f)
-            )
-            NavTile(
-                icon = Icons.Default.Build,
-                label = "终端",
-                selected = screen == AppScreen.TERMINAL,
-                onClick = { onNavigate(AppScreen.TERMINAL) },
-                modifier = Modifier.weight(1f)
-            )
-            NavTile(
-                icon = Icons.Default.Star,
-                label = "记忆",
-                selected = screen == AppScreen.MEMORY,
-                onClick = { onNavigate(AppScreen.MEMORY) },
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            NavTile(
-                icon = Icons.AutoMirrored.Filled.List,
-                label = "知识",
-                selected = screen == AppScreen.KNOWLEDGE,
-                onClick = { onNavigate(AppScreen.KNOWLEDGE) },
-                modifier = Modifier.weight(1f)
-            )
-            NavTile(
-                icon = Icons.Default.Search,
-                label = "插件",
-                selected = screen == AppScreen.PLUGINS,
-                onClick = { onNavigate(AppScreen.PLUGINS) },
-                modifier = Modifier.weight(1f)
-            )
-            NavTile(
-                icon = Icons.Default.Settings,
-                label = "设置",
-                selected = screen == AppScreen.SETTINGS,
-                onClick = { onNavigate(AppScreen.SETTINGS) },
-                modifier = Modifier.weight(1f)
-            )
-        }
+        // 功能入口改成竖排列表：图标对齐左侧，不再挤成一堆方块
+        DrawerNavRow(
+            icon = Icons.Default.Home,
+            label = "对话",
+            selected = screen == AppScreen.CHAT,
+            onClick = { onNavigate(AppScreen.CHAT) }
+        )
+        DrawerNavRow(
+            icon = Icons.Default.Build,
+            label = "终端",
+            selected = screen == AppScreen.TERMINAL,
+            onClick = { onNavigate(AppScreen.TERMINAL) }
+        )
+        DrawerNavRow(
+            icon = Icons.Default.Star,
+            label = "记忆库",
+            selected = screen == AppScreen.MEMORY,
+            onClick = { onNavigate(AppScreen.MEMORY) }
+        )
+        DrawerNavRow(
+            icon = Icons.AutoMirrored.Filled.List,
+            label = "知识库",
+            selected = screen == AppScreen.KNOWLEDGE,
+            onClick = { onNavigate(AppScreen.KNOWLEDGE) }
+        )
+        DrawerNavRow(
+            icon = Icons.Default.Search,
+            label = "工具与插件",
+            selected = screen == AppScreen.PLUGINS,
+            onClick = { onNavigate(AppScreen.PLUGINS) }
+        )
+        DrawerNavRow(
+            icon = Icons.Default.Settings,
+            label = "设置",
+            selected = screen == AppScreen.SETTINGS,
+            onClick = { onNavigate(AppScreen.SETTINGS) }
+        )
 
         Spacer(Modifier.height(8.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -179,6 +172,55 @@ fun ConversationDrawer(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 6.dp, top = 4.dp)
         )
+    }
+}
+
+/** 折叠栏里的单个功能入口：图标在左、文字在右，行高压到最低 */
+@Composable
+private fun DrawerNavRow(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            Color.Transparent
+        },
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp)
+            .clickable { onClick() }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(19.dp),
+                tint = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                }
+            )
+        }
     }
 }
 

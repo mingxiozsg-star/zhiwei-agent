@@ -85,10 +85,16 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
     var confirmClearMessages by remember { mutableStateOf(false) }
     var confirmResetStats by remember { mutableStateOf(false) }
 
+    val prompts by vm.prompts.collectAsState()
+    var promptEditorOpen by remember { mutableStateOf(false) }
+    var promptEditId by remember { mutableStateOf<String?>(null) }
+    var promptTitle by remember { mutableStateOf("") }
+    var promptBody by remember { mutableStateOf("") }
+
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.2.0"
+        }.getOrNull() ?: "1.3.0"
     }
     val poolKeys = settings.usableKeys()
 
@@ -259,16 +265,28 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                     )
                     Divider()
                     SwitchRow(
+                        title = "允许设备操控",
+                        subtitle = "音量、亮度、手电筒、震动、开应用、朗读",
+                        checked = settings.enableDeviceTools,
+                        onChange = { v -> vm.updateSettings { it.copy(enableDeviceTools = v) } }
+                    )
+                    Divider()
+                    SwitchRow(
                         title = "启用自定义插件",
                         subtitle = "让模型调用你导入的工具",
                         checked = settings.enablePlugins,
                         onChange = { v -> vm.updateSettings { it.copy(enablePlugins = v) } }
                     )
                     StepperRow(
-                        title = "工具调用轮次上限",
+                        title = "每回合工具预算",
                         value = settings.toolMaxRounds,
-                        range = 1..8,
+                        range = 2..40,
                         onChange = { v -> vm.updateSettings { it.copy(toolMaxRounds = v) } }
+                    )
+                    Text(
+                        text = "时间、计算、设备信息等本地只读工具不占预算；用完了回一句「继续」即可接着做。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     StepperRow(
                         title = "每次带上的历史消息",
@@ -300,6 +318,59 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                         TextButton(onClick = {
                             vm.updateSettings { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) }
                         }) { Text("恢复默认提示词") }
+                    }
+                }
+            }
+
+            // ---------------- 提示词库 ----------------
+            item {
+                SectionCard("提示词库") {
+                    Text(
+                        text = "聊天页输入栏的 ＋ 里直接点选；常用问法存这儿，点一下填进输入框。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (prompts.isEmpty()) {
+                        Text(
+                            text = "还没有提示词。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    prompts.forEach { p ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = p.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = p.text.replace('\n', ' '),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            TextButton(onClick = {
+                                promptEditId = p.id
+                                promptTitle = p.title
+                                promptBody = p.text
+                                promptEditorOpen = true
+                            }) { Text("编辑") }
+                            TextButton(onClick = { vm.deletePrompt(p.id) }) { Text("删除") }
+                        }
+                        Divider()
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            promptEditId = null
+                            promptTitle = ""
+                            promptBody = ""
+                            promptEditorOpen = true
+                        }) { Text("新增提示词") }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { vm.resetPrompts() }) { Text("清空全部") }
                     }
                 }
             }
@@ -563,6 +634,51 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
 
             item { Spacer(Modifier.padding(bottom = 24.dp)) }
         }
+    }
+
+    if (promptEditorOpen) {
+        AlertDialog(
+            onDismissRequest = { promptEditorOpen = false },
+            title = { Text(if (promptEditId == null) "新增提示词" else "编辑提示词") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = promptTitle,
+                        onValueChange = { promptTitle = it },
+                        label = { Text("名称") },
+                        placeholder = { Text("例如：总结要点") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = promptBody,
+                        onValueChange = { promptBody = it },
+                        label = { Text("内容") },
+                        placeholder = { Text("例如：把下面这段总结成三条要点：") },
+                        minLines = 3,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = promptBody.isNotBlank(),
+                    onClick = {
+                        val id = promptEditId
+                        if (id == null) {
+                            vm.addPrompt(promptTitle, promptBody)
+                        } else {
+                            vm.updatePrompt(id, promptTitle, promptBody)
+                        }
+                        promptEditorOpen = false
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { promptEditorOpen = false }) { Text("取消") }
+            }
+        )
     }
 
     if (confirmClearConvs) {

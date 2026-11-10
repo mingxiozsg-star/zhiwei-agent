@@ -97,7 +97,7 @@ fun ZhiweiApp(vm: ChatViewModel) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.2.0"
+        }.getOrNull() ?: "1.3.0"
     }
 
     val view = LocalView.current

@@ -45,8 +45,10 @@ data class AppSettings(
     val streamOutput: Boolean = true,
     val enableTools: Boolean = true,
     val enableShellTool: Boolean = false,
+    /** 设备操控类工具（音量、亮度、手电筒、震动、应用开关等）总开关 */
+    val enableDeviceTools: Boolean = true,
     val tavilyApiKey: String = "",
-    val toolMaxRounds: Int = 4,
+    val toolMaxRounds: Int = 12,
     /** 每次请求最多带上的历史消息条数 */
     val contextLimit: Int = 24,
 
@@ -133,8 +135,9 @@ class SettingsStore(context: Context) {
         streamOutput = sp.getBoolean("streamOutput", true),
         enableTools = sp.getBoolean("enableTools", true),
         enableShellTool = sp.getBoolean("enableShellTool", false),
+        enableDeviceTools = sp.getBoolean("enableDeviceTools", true),
         tavilyApiKey = sp.getString("tavilyApiKey", "") ?: "",
-        toolMaxRounds = sp.getInt("toolMaxRounds", 4),
+        toolMaxRounds = sp.getInt("toolMaxRounds", 12),
         contextLimit = sp.getInt("contextLimit", 24),
         autoMemory = sp.getBoolean("autoMemory", true),
         memoryTopK = sp.getInt("memoryTopK", 4),
@@ -170,6 +173,7 @@ class SettingsStore(context: Context) {
             .putBoolean("streamOutput", s.streamOutput)
             .putBoolean("enableTools", s.enableTools)
             .putBoolean("enableShellTool", s.enableShellTool)
+            .putBoolean("enableDeviceTools", s.enableDeviceTools)
             .putString("tavilyApiKey", s.tavilyApiKey)
             .putInt("toolMaxRounds", s.toolMaxRounds)
             .putInt("contextLimit", s.contextLimit)
