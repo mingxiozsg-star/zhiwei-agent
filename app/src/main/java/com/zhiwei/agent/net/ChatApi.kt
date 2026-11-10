@@ -258,20 +258,41 @@ class ChatApi {
         history.forEach { m ->
             when (m.role) {
                 ROLE_ASSISTANT -> {
+                    val acts = m.activities
+                    val calls = if (m.toolCalls.isNotEmpty()) {
+                        m.toolCalls
+                    } else {
+                        acts.map {
+                            ToolCall(
+                                id = it.callId.ifBlank { it.id },
+                                name = it.name,
+                                arguments = it.arguments.ifBlank { "{}" }
+                            )
+                        }
+                    }
                     val o = JSONObject()
                     o.put("role", "assistant")
-                    if (m.content.isBlank() && m.toolCalls.isNotEmpty()) {
+                    if (m.content.isBlank() && calls.isNotEmpty()) {
                         o.put("content", JSONObject.NULL)
                     } else {
                         o.put("content", m.content)
                     }
-                    if (m.toolCalls.isNotEmpty()) {
+                    if (calls.isNotEmpty()) {
                         o.put(
                             "tool_calls",
-                            JSONArray().apply { m.toolCalls.forEach { put(it.toJson()) } }
+                            JSONArray().apply { calls.forEach { put(it.toJson()) } }
                         )
                     }
                     arr.put(o)
+                    // 助手消息里的工具结果要按协议补成独立的 tool 消息
+                    acts.forEach { a ->
+                        arr.put(
+                            JSONObject()
+                                .put("role", "tool")
+                                .put("tool_call_id", a.callId.ifBlank { a.id })
+                                .put("content", a.result.ifBlank { "（无结果）" })
+                        )
+                    }
                 }
 
                 ROLE_TOOL -> {

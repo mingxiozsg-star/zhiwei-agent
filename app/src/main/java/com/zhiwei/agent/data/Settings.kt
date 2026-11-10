@@ -29,7 +29,20 @@ data class AppSettings(
     val enableShellTool: Boolean = false,
     val tavilyApiKey: String = "",
     val themeMode: String = THEME_SYSTEM,
-    val toolMaxRounds: Int = 4
+    val toolMaxRounds: Int = 4,
+    /** 自动把对话里的长期信息写进记忆库 */
+    val autoMemory: Boolean = true,
+    /** 每轮对话注入的记忆条数 */
+    val memoryTopK: Int = 4,
+    /** 每轮对话注入的知识库片段数 */
+    val knowledgeTopK: Int = 3,
+    /** 是否把记忆/知识注入系统提示词 */
+    val injectContext: Boolean = true,
+    /** 是否启用自定义插件工具 */
+    val enablePlugins: Boolean = true,
+    /** 抽屉宽度占屏比 */
+    val drawerRatio: Float = 0.42f,
+    val extractModel: String = ""
 ) {
     /** 补全成完整的 chat/completions 地址 */
     fun endpoint(): String {
@@ -74,7 +87,14 @@ class SettingsStore(context: Context) {
         enableShellTool = sp.getBoolean("enableShellTool", false),
         tavilyApiKey = sp.getString("tavilyApiKey", "") ?: "",
         themeMode = sp.getString("themeMode", THEME_SYSTEM) ?: THEME_SYSTEM,
-        toolMaxRounds = sp.getInt("toolMaxRounds", 4)
+        toolMaxRounds = sp.getInt("toolMaxRounds", 4),
+        autoMemory = sp.getBoolean("autoMemory", true),
+        memoryTopK = sp.getInt("memoryTopK", 4),
+        knowledgeTopK = sp.getInt("knowledgeTopK", 3),
+        injectContext = sp.getBoolean("injectContext", true),
+        enablePlugins = sp.getBoolean("enablePlugins", true),
+        drawerRatio = sp.getFloat("drawerRatio", 0.42f),
+        extractModel = sp.getString("extractModel", "") ?: ""
     )
 
     fun save(s: AppSettings) {
@@ -91,6 +111,13 @@ class SettingsStore(context: Context) {
             .putString("tavilyApiKey", s.tavilyApiKey)
             .putString("themeMode", s.themeMode)
             .putInt("toolMaxRounds", s.toolMaxRounds)
+            .putBoolean("autoMemory", s.autoMemory)
+            .putInt("memoryTopK", s.memoryTopK)
+            .putInt("knowledgeTopK", s.knowledgeTopK)
+            .putBoolean("injectContext", s.injectContext)
+            .putBoolean("enablePlugins", s.enablePlugins)
+            .putFloat("drawerRatio", s.drawerRatio)
+            .putString("extractModel", s.extractModel)
             .apply()
     }
 }

@@ -1,6 +1,5 @@
 package com.zhiwei.agent.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,20 +10,28 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.data.Conversation
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_USER
@@ -45,66 +53,114 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * 折叠栏：半屏宽度，展开时把对话页整体推开（不是盖在上面）。
+ * 上半是功能入口，下半是会话来列表。
+ */
 @Composable
 fun ConversationDrawer(
     conversations: List<Conversation>,
     currentId: String?,
+    screen: AppScreen,
+    versionName: String,
     onSelect: (String) -> Unit,
     onNew: () -> Unit,
     onRename: (Conversation) -> Unit,
-    onDelete: (String) -> Unit
+    onDelete: (String) -> Unit,
+    onNavigate: (AppScreen) -> Unit
 ) {
-    ModalDrawerSheet(
-        drawerContainerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.width(300.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 12.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 20.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ZhiweiAvatar(size = 40.dp)
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "知微智能体",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "${conversations.size} 个会话 · 本地存储",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+        Text(
+            text = "知微智能体",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 6.dp)
+        )
+        Text(
+            text = "本地运行 · 数据只存本机",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 6.dp, top = 2.dp)
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Row(modifier = Modifier.fillMaxWidth()) {
+            NavTile(
+                icon = Icons.Default.Home,
+                label = "对话",
+                selected = screen == AppScreen.CHAT,
+                onClick = { onNavigate(AppScreen.CHAT) },
+                modifier = Modifier.weight(1f)
+            )
+            NavTile(
+                icon = Icons.Default.Build,
+                label = "终端",
+                selected = screen == AppScreen.TERMINAL,
+                onClick = { onNavigate(AppScreen.TERMINAL) },
+                modifier = Modifier.weight(1f)
+            )
+            NavTile(
+                icon = Icons.Default.Star,
+                label = "记忆",
+                selected = screen == AppScreen.MEMORY,
+                onClick = { onNavigate(AppScreen.MEMORY) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            NavTile(
+                icon = Icons.Default.List,
+                label = "知识",
+                selected = screen == AppScreen.KNOWLEDGE,
+                onClick = { onNavigate(AppScreen.KNOWLEDGE) },
+                modifier = Modifier.weight(1f)
+            )
+            NavTile(
+                icon = Icons.Default.Search,
+                label = "插件",
+                selected = screen == AppScreen.PLUGINS,
+                onClick = { onNavigate(AppScreen.PLUGINS) },
+                modifier = Modifier.weight(1f)
+            )
+            NavTile(
+                icon = Icons.Default.Settings,
+                label = "设置",
+                selected = screen == AppScreen.SETTINGS,
+                onClick = { onNavigate(AppScreen.SETTINGS) },
+                modifier = Modifier.weight(1f)
+            )
         }
 
+        Spacer(Modifier.height(8.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(6.dp))
 
-        Surface(
-            color = Color.Transparent,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-                .pointerInput(Unit) { detectTapGestures(onTap = { onNew() }) }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Text(
+                text = "会话 · ${conversations.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onNew, modifier = Modifier.size(32.dp)) {
                 Icon(
                     Icons.Default.Add,
-                    contentDescription = null,
+                    contentDescription = "新对话",
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Spacer(Modifier.width(12.dp))
-                Text("新对话", style = MaterialTheme.typography.bodyLarge)
             }
         }
 
-        LazyColumn(modifier = Modifier.fillMaxHeight()) {
+        LazyColumn(modifier = Modifier.weight(1f)) {
             items(conversations, key = { it.id }) { conv ->
                 ConversationRow(
                     conversation = conv,
@@ -114,10 +170,15 @@ fun ConversationDrawer(
                     onDelete = { onDelete(conv.id) }
                 )
             }
-            item {
-                Spacer(Modifier.height(24.dp))
-            }
+            item { Spacer(Modifier.height(12.dp)) }
         }
+
+        Text(
+            text = "v$versionName",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 6.dp, top = 4.dp)
+        )
     }
 }
 
@@ -138,10 +199,10 @@ private fun ConversationRow(
         } else {
             Color.Transparent
         },
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 2.dp)
+            .padding(vertical = 2.dp)
             .pointerInput(conversation.id) {
                 detectTapGestures(
                     onTap = { onClick() },
@@ -150,13 +211,13 @@ private fun ConversationRow(
             }
     ) {
         Row(
-            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = conversation.title,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -169,7 +230,7 @@ private fun ConversationRow(
                 )
             }
             Box {
-                IconButton(onClick = { menu = true }) {
+                IconButton(onClick = { menu = true }, modifier = Modifier.size(30.dp)) {
                     Icon(
                         Icons.Default.MoreVert,
                         contentDescription = "会话操作",
@@ -179,6 +240,7 @@ private fun ConversationRow(
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(
                         text = { Text("重命名") },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                         onClick = {
                             menu = false
                             onRename()
@@ -186,6 +248,7 @@ private fun ConversationRow(
                     )
                     DropdownMenuItem(
                         text = { Text("删除会话") },
+                        leadingIcon = { Icon(Icons.Default.DateRange, contentDescription = null) },
                         onClick = {
                             menu = false
                             onDelete()
@@ -205,13 +268,5 @@ private fun previewOf(conversation: Conversation): String {
         else -> ""
     }
     val text = last.content.replace('\n', ' ').trim()
-    return who + if (text.length > 24) text.take(24) + "…" else text
-}
-
-@Composable
-fun DrawerSpacer(conversations: List<Conversation>) {
-    // 预留：会话多时用于分组标题，当前保持空实现
-    if (conversations.isEmpty()) {
-        Spacer(Modifier.height(8.dp))
-    }
+    return who + if (text.length > 20) text.take(20) + "…" else text
 }

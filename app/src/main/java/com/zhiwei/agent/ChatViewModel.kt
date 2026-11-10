@@ -6,16 +6,27 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.zhiwei.agent.agent.AgentEnv
 import com.zhiwei.agent.agent.ShellRunner
 import com.zhiwei.agent.agent.ToolRegistry
+import com.zhiwei.agent.data.ACT_DONE
+import com.zhiwei.agent.data.ACT_ERROR
+import com.zhiwei.agent.data.ACT_RUNNING
 import com.zhiwei.agent.data.AppSettings
 import com.zhiwei.agent.data.ChatMessage
 import com.zhiwei.agent.data.Conversation
 import com.zhiwei.agent.data.ConversationStore
+import com.zhiwei.agent.data.KnowledgeItem
+import com.zhiwei.agent.data.KnowledgeStore
+import com.zhiwei.agent.data.MemoryItem
+import com.zhiwei.agent.data.MemoryStore
+import com.zhiwei.agent.data.PluginStore
+import com.zhiwei.agent.data.PluginTool
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_TOOL
 import com.zhiwei.agent.data.ROLE_USER
 import com.zhiwei.agent.data.SettingsStore
+import com.zhiwei.agent.data.ToolActivity
 import com.zhiwei.agent.data.ToolCall
 import com.zhiwei.agent.net.ChatApi
 import com.zhiwei.agent.net.ChatEvent
@@ -27,6 +38,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class TerminalLine(
     val text: String,
@@ -34,10 +47,21 @@ data class TerminalLine(
     val isError: Boolean = false
 )
 
+/** 抽屉里的功能页 */
+enum class AppScreen { CHAT, TERMINAL, MEMORY, KNOWLEDGE, PLUGINS, SETTINGS }
+
+private const val EXTRACT_PROMPT =
+    "你是记忆抽取器。从下面的对话里找出值得长期记住的事实：用户的身份、偏好、习惯、长期目标、重要约定、正在做的项目。\n" +
+        "只输出 JSON 数组，元素是简短的中文句子，每条自带上下文（例如「用户常用 DeepSeek 的中转接口」）。\n" +
+        "没有值得记的就输出 []。不要输出任何解释文字。"
+
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = ConversationStore(app)
     private val settingsStore = SettingsStore(app)
+    private val memoryStore = MemoryStore(app)
+    private val knowledgeStore = KnowledgeStore(app)
+    private val pluginStore = PluginStore(app)
     private val api = ChatApi()
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
@@ -70,6 +94,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _terminalBusy = MutableStateFlow(false)
     val terminalBusy: StateFlow<Boolean> = _terminalBusy.asStateFlow()
 
+    private val _memories = MutableStateFlow<List<MemoryItem>>(emptyList())
+    val memories: StateFlow<List<MemoryItem>> = _memories.asStateFlow()
+
+    private val _knowledge = MutableStateFlow<List<KnowledgeItem>>(emptyList())
+    val knowledge: StateFlow<List<KnowledgeItem>> = _knowledge.asStateFlow()
+
+    private val _plugins = MutableStateFlow<List<PluginTool>>(emptyList())
+    val plugins: StateFlow<List<PluginTool>> = _plugins.asStateFlow()
+
+    private val _memoryBusy = MutableStateFlow(false)
+    val memoryBusy: StateFlow<Boolean> = _memoryBusy.asStateFlow()
+
     private var runJob: Job? = null
 
     val currentConversation: Conversation?
@@ -89,6 +125,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _currentId.value = sorted.first().id
                 _messages.value = sorted.first().messages
             }
+            _memories.value = withContext(Dispatchers.IO) { memoryStore.load() }
+            _knowledge.value = withContext(Dispatchers.IO) { knowledgeStore.load() }
+            _plugins.value = withContext(Dispatchers.IO) { pluginStore.load() }
         }
     }
 
@@ -174,7 +213,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         runJob = null
         _busy.value = false
         setMessages(
-            _messages.value.map { if (it.streaming) it.copy(streaming = false) else it },
+            _messages.value.map { m ->
+                if (m.streaming) {
+                    m.copy(
+                        streaming = false,
+                        activities = m.activities.map {
+                            if (it.status == ACT_RUNNING) it.copy(status = ACT_ERROR)
+                            else it
+                        }
+                    )
+                } else {
+                    m
+                }
+            },
             persist = true
         )
     }
@@ -194,6 +245,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         runJob = viewModelScope.launch {
             try {
                 assistantLoop()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _notice.value = "出错了：${e.message}"
             } finally {
                 _busy.value = false
                 runJob = null
@@ -205,25 +260,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 一个回合 = 界面上一条消息。
+     * 工具调用挂在这条消息的 activities 上，不再拆成多条。
+     */
     private suspend fun assistantLoop() {
         val settings = _settings.value
-        var round = 0
-        while (true) {
-            val placeholder = ChatMessage(role = ROLE_ASSISTANT, content = "", streaming = true)
-            appendLocal(placeholder)
+        val env = env()
+        val tools = if (settings.enableTools) ToolRegistry.specs(env) else emptyList()
 
-            val sb = StringBuilder()
+        val placeholder = ChatMessage(role = ROLE_ASSISTANT, content = "", streaming = true)
+        appendLocal(placeholder)
+
+        val text = StringBuilder()
+        val query = _messages.value.lastOrNull { it.role == ROLE_USER }?.content ?: ""
+        val effective = if (settings.injectContext) injectContext(settings, query) else settings
+        var round = 0
+
+        while (true) {
             var calls: List<ToolCall> = emptyList()
             var failure: String? = null
-
-            val tools = if (settings.enableTools) ToolRegistry.specs(settings) else emptyList()
+            val base = text.toString()
+            val roundText = StringBuilder()
             val history = _messages.value.filter { it.id != placeholder.id }
 
-            api.streamChat(settings, history, tools) { event ->
+            api.streamChat(effective, history, tools) { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
-                        sb.append(event.text)
-                        replaceLocal(placeholder.id) { it.copy(content = sb.toString(), streaming = true) }
+                        roundText.append(event.text)
+                        replaceLocal(placeholder.id) {
+                            it.copy(content = base + roundText.toString(), streaming = true)
+                        }
                     }
 
                     is ChatEvent.ToolCalls -> calls = event.calls
@@ -233,60 +300,67 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             if (failure != null) {
-                val body = sb.toString().trim()
-                val shown = failure ?: "未知错误"
+                val body = (base + roundText.toString()).trim()
                 replaceLocal(placeholder.id) {
                     it.copy(
-                        content = if (body.isEmpty()) "请求失败：$shown" else body,
+                        content = if (body.isEmpty()) "请求失败：$failure" else body,
                         isError = true,
                         streaming = false
                     )
                 }
-                appendLocal(
-                    ChatMessage(
-                        role = ROLE_TOOL,
-                        toolName = "error",
-                        content = shown
-                    )
-                )
                 break
             }
 
-            replaceLocal(placeholder.id) {
-                it.copy(content = sb.toString(), toolCalls = calls, streaming = false)
-            }
+            text.append(roundText)
+            replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = true) }
 
             if (calls.isEmpty()) break
 
             if (round >= settings.toolMaxRounds) {
-                appendLocal(
-                    ChatMessage(
-                        role = ROLE_TOOL,
-                        toolName = "limit",
-                        content = "已达到工具调用轮次上限（${settings.toolMaxRounds} 轮），先停在这里。"
-                    )
-                )
+                text.append("\n\n（已达到工具调用轮次上限 ${settings.toolMaxRounds} 轮，先停在这里）")
+                replaceLocal(placeholder.id) { it.copy(content = text.toString()) }
                 break
             }
 
             calls.forEach { call ->
-                val toolMsg = ChatMessage(
-                    role = ROLE_TOOL,
-                    toolCallId = call.id,
-                    toolName = call.name,
-                    content = "执行中…"
-                )
-                appendLocal(toolMsg)
-                val result = ToolRegistry.execute(
-                    getApplication(),
-                    settings,
-                    call.name,
-                    call.arguments
-                )
-                replaceLocal(toolMsg.id) { it.copy(content = result) }
+                val label = ToolRegistry.labelFor(env, call.name)
+                replaceLocal(placeholder.id) { msg ->
+                    msg.copy(
+                        activities = msg.activities + ToolActivity(
+                            callId = call.id,
+                            name = call.name,
+                            label = label,
+                            arguments = call.arguments,
+                            status = ACT_RUNNING
+                        )
+                    )
+                }
+                val outcome = ToolRegistry.execute(env, call.name, call.arguments)
+                outcome.newMemory?.let { addMemoryItem(it, persist = true) }
+                outcome.newKnowledge?.let { addKnowledgeItem(it, persist = true) }
+                val failed = outcome.text.startsWith("工具执行失败")
+                replaceLocal(placeholder.id) { msg ->
+                    msg.copy(
+                        activities = msg.activities.map {
+                            if (it.callId == call.id) {
+                                it.copy(
+                                    result = outcome.text,
+                                    status = if (failed) ACT_ERROR else ACT_DONE,
+                                    finishedAt = System.currentTimeMillis()
+                                )
+                            } else {
+                                it
+                            }
+                        }
+                    )
+                }
             }
             round++
         }
+
+        replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = false) }
+        persistNow()
+        maybeExtractMemory()
     }
 
     private fun ensureConversation() {
@@ -337,6 +411,292 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { store.save(snapshot) }
     }
 
+    // ---------- 上下文注入 ----------
+
+    private fun env(): AgentEnv = AgentEnv(
+        context = getApplication(),
+        settings = _settings.value,
+        memory = memoryStore,
+        knowledge = knowledgeStore,
+        pluginStore = pluginStore,
+        memories = _memories.value,
+        knowledgeList = _knowledge.value,
+        pluginList = _plugins.value
+    )
+
+    private fun injectContext(s: AppSettings, query: String): AppSettings {
+        val blocks = StringBuilder()
+        val mems = memoryStore.search(_memories.value, query, s.memoryTopK)
+        if (mems.isNotEmpty()) {
+            blocks.append("\n\n【记忆库】跨对话长期记忆，直接当已知事实用，不要问用户是否记得：\n")
+            mems.forEach { blocks.append("- ").append(it.text).append('\n') }
+        }
+        val hits = knowledgeStore.search(_knowledge.value, query, s.knowledgeTopK)
+        if (hits.isNotEmpty()) {
+            blocks.append("\n【知识库片段】用户导入的资料，回答时优先依据这些内容：\n")
+            hits.forEach { blocks.append("〔").append(it.title).append("〕").append(it.text.take(900)).append('\n') }
+        }
+        if (blocks.isEmpty()) return s
+        return s.copy(systemPrompt = s.systemPrompt + blocks)
+    }
+
+    // ---------- 记忆库 ----------
+
+    /** 对话结束后自动抽取长期记忆 */
+    private suspend fun maybeExtractMemory() {
+        val settings = _settings.value
+        if (!settings.autoMemory) return
+        if (settings.apiKey.isBlank() && !settings.baseUrl.contains("localhost")) {
+            // 本地接口不需要 key，其他情况没 key 就没法抽取
+        }
+        val msgs = _messages.value
+        val userMsgs = msgs.filter { it.role == ROLE_USER }
+        if (userMsgs.isEmpty()) return
+
+        val convo = msgs.takeLast(8).joinToString("\n") { m ->
+            when (m.role) {
+                ROLE_USER -> "用户：" + m.content.take(600)
+                ROLE_ASSISTANT -> "助手：" + m.content.take(600)
+                else -> ""
+            }
+        }.trim()
+        if (convo.isBlank()) return
+
+        _memoryBusy.value = true
+        try {
+            val extractSettings = settings.copy(
+                systemPrompt = EXTRACT_PROMPT,
+                streamOutput = false,
+                model = if (settings.extractModel.isNotBlank()) settings.extractModel else settings.model,
+                maxTokens = 600
+            )
+            val result = api.chatOnce(
+                extractSettings,
+                listOf(ChatMessage(role = ROLE_USER, content = convo)),
+                emptyList()
+            )
+            result.onSuccess { (content, _) ->
+                parseMemories(content).forEach { addMemoryItem(it, persist = false) }
+                persistMemories()
+            }
+        } catch (_: Exception) {
+            // 抽取失败不影响对话
+        } finally {
+            _memoryBusy.value = false
+        }
+    }
+
+    private fun parseMemories(content: String): List<MemoryItem> {
+        val t = content.trim()
+        if (t.isEmpty()) return emptyList()
+        val out = mutableListOf<MemoryItem>()
+        val jsonText = t.substringAfter("[", "").let { if (it.isEmpty()) "" else "[" + it }
+        if (jsonText.isNotEmpty()) {
+            try {
+                val arr = JSONArray(jsonText.substringBeforeLast("]") + "]")
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i, "").trim()
+                    if (s.isNotEmpty()) out.add(MemoryItem(text = s, source = "自动记忆"))
+                }
+                if (out.isNotEmpty()) return out
+            } catch (_: Exception) {
+            }
+        }
+        t.lines()
+            .map { it.trim().removePrefix("-").removePrefix("*").trim() }
+            .filter { it.isNotEmpty() && it.length in 4..200 && !it.startsWith("[") }
+            .forEach { out.add(MemoryItem(text = it, source = "自动记忆")) }
+        return out
+    }
+
+    fun addMemoryItem(item: MemoryItem, persist: Boolean = true) {
+        _memories.update { memoryStore.upsert(it, item) }
+        if (persist) persistMemories()
+    }
+
+    fun addMemory(text: String, source: String = "手动") {
+        val t = text.trim()
+        if (t.isEmpty()) return
+        addMemoryItem(MemoryItem(text = t, source = source))
+        _notice.value = "已加入记忆"
+    }
+
+    fun updateMemory(id: String, text: String) {
+        _memories.update { list -> list.map { if (it.id == id) it.copy(text = text.trim()) else it } }
+        persistMemories()
+    }
+
+    fun togglePinMemory(id: String) {
+        _memories.update { list -> list.map { if (it.id == id) it.copy(pinned = !it.pinned) else it } }
+        persistMemories()
+    }
+
+    fun deleteMemory(id: String) {
+        _memories.update { list -> list.filterNot { it.id == id } }
+        persistMemories()
+    }
+
+    fun clearMemories() {
+        _memories.value = emptyList()
+        persistMemories()
+    }
+
+    /** 手动的“重新抽取记忆” */
+    fun extractMemoryNow() {
+        if (_memoryBusy.value) return
+        viewModelScope.launch {
+            maybeExtractMemory()
+            _notice.value = "已根据当前对话更新记忆（共 ${_memories.value.size} 条）"
+        }
+    }
+
+    private fun persistMemories() {
+        val snapshot = _memories.value
+        viewModelScope.launch(Dispatchers.IO) { memoryStore.save(snapshot) }
+    }
+
+    // ---------- 知识库 ----------
+
+    fun addKnowledgeItem(item: KnowledgeItem, persist: Boolean = true) {
+        _knowledge.update { listOf(item) + it }
+        if (persist) persistKnowledge()
+        _notice.value = "已存进知识库：${item.title}"
+    }
+
+    fun addKnowledge(title: String, content: String, source: String = "手动添加") {
+        val t = title.trim().ifBlank { "未命名知识" }
+        val c = content.trim()
+        if (c.isEmpty()) return
+        addKnowledgeItem(KnowledgeItem(title = t, content = c, source = source))
+    }
+
+    fun updateKnowledge(id: String, title: String, content: String) {
+        _knowledge.update { list ->
+            list.map {
+                if (it.id == id) {
+                    it.copy(title = title.trim(), content = content.trim(), updatedAt = System.currentTimeMillis())
+                } else {
+                    it
+                }
+            }
+        }
+        persistKnowledge()
+    }
+
+    fun deleteKnowledge(id: String) {
+        _knowledge.update { list -> list.filterNot { it.id == id } }
+        persistKnowledge()
+    }
+
+    fun clearKnowledge() {
+        _knowledge.value = emptyList()
+        persistKnowledge()
+    }
+
+    /** 抓取网页正文后直接存进知识库 */
+    fun importFromUrl(url: String, title: String) {
+        val u = url.trim()
+        if (u.isEmpty()) return
+        viewModelScope.launch {
+            _notice.value = "正在抓取…"
+            val text = withContext(Dispatchers.IO) {
+                try {
+                    val fixed = if (u.startsWith("http")) u else "https://$u"
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(40, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+                    val req = okhttp3.Request.Builder()
+                        .url(fixed)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) ZhiweiAgent")
+                        .get()
+                        .build()
+                    client.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) return@withContext "抓取失败：HTTP ${resp.code}"
+                        val body = resp.body?.string().orEmpty()
+                        ToolRegistry.htmlToText(body).take(20000)
+                    }
+                } catch (e: Exception) {
+                    "抓取失败：${e.message}"
+                }
+            }
+            if (text.startsWith("抓取失败")) {
+                _notice.value = text
+            } else {
+                val t = title.trim().ifBlank { u.substringAfterLast("/").take(40).ifBlank { "网页资料" } }
+                addKnowledgeItem(
+                    KnowledgeItem(title = t, content = text, source = "网页 $u")
+                )
+            }
+        }
+    }
+
+    private fun persistKnowledge() {
+        val snapshot = _knowledge.value
+        viewModelScope.launch(Dispatchers.IO) { knowledgeStore.save(snapshot) }
+    }
+
+    // ---------- 插件 ----------
+
+    fun importPlugins(text: String, mcpUrl: String = ""): Int {
+        val parsed = com.zhiwei.agent.data.PluginParser.parse(text, mcpUrl)
+        if (parsed.isEmpty()) {
+            _notice.value = "没解析出任何工具，检查一下粘贴的内容"
+            return 0
+        }
+        _plugins.update { existing ->
+            val names = existing.map { it.safeName() }.toMutableSet()
+            val added = parsed.filter { names.add(it.safeName()) }
+            existing + added
+        }
+        persistPlugins()
+        _notice.value = "已导入 ${parsed.size} 个工具"
+        return parsed.size
+    }
+
+    fun addPlugin(plugin: PluginTool) {
+        _plugins.update { it + plugin }
+        persistPlugins()
+        _notice.value = "已添加工具：${plugin.name}"
+    }
+
+    fun updatePlugin(plugin: PluginTool) {
+        _plugins.update { list -> list.map { if (it.id == plugin.id) plugin else it } }
+        persistPlugins()
+    }
+
+    fun togglePlugin(id: String) {
+        _plugins.update { list -> list.map { if (it.id == id) it.copy(enabled = !it.enabled) else it } }
+        persistPlugins()
+    }
+
+    fun deletePlugin(id: String) {
+        _plugins.update { list -> list.filterNot { it.id == id } }
+        persistPlugins()
+    }
+
+    /** 试跑一次，返回结果文本 */
+    fun testPlugin(id: String, argsJson: String) {
+        val plugin = _plugins.value.firstOrNull { it.id == id } ?: return
+        viewModelScope.launch {
+            _notice.value = "正在试跑 ${plugin.name}…"
+            val out = com.zhiwei.agent.agent.PluginRunner.execute(env(), plugin, argsJson)
+            _pluginTestResult.value = plugin.name + "\n" + out
+        }
+    }
+
+    private val _pluginTestResult = MutableStateFlow<String?>(null)
+    val pluginTestResult: StateFlow<String?> = _pluginTestResult.asStateFlow()
+
+    fun clearPluginTestResult() {
+        _pluginTestResult.value = null
+    }
+
+    private fun persistPlugins() {
+        val snapshot = _plugins.value
+        viewModelScope.launch(Dispatchers.IO) { pluginStore.save(snapshot) }
+    }
+
     // ---------- 设置 ----------
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
@@ -383,7 +743,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val added = mutableListOf<TerminalLine>()
                 if (out.isNotEmpty()) added.add(TerminalLine(out, isError = !result.ok))
                 if (!result.ok && out.isEmpty()) {
-                    added.add(TerminalLine("命令没有输出（退出码 ${result.exitCode}）", isError = true))
+                    added.add(TerminalLine("（退出码 ${result.exitCode}）", isError = true))
                 }
                 list + added
             }
@@ -406,5 +766,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             _notice.value = "复制失败：${e.message}"
         }
+    }
+
+    fun toast(text: String) {
+        _notice.value = text
+    }
+
+    /** 供设置页做 JSON 校验 */
+    fun prettyJson(raw: String): String? = try {
+        JSONObject(raw).toString(2)
+    } catch (_: Exception) {
+        null
     }
 }

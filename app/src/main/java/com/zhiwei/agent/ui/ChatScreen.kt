@@ -18,6 +18,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
@@ -41,6 +44,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,10 +52,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.collectAsState
+import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.data.ROLE_ASSISTANT
 import java.io.File
@@ -60,27 +67,38 @@ import java.io.File
 @Composable
 fun ChatScreen(
     vm: ChatViewModel,
-    onOpenDrawer: () -> Unit
+    onOpenDrawer: () -> Unit,
+    onNavigate: (AppScreen) -> Unit = {}
 ) {
     val messages by vm.messages.collectAsState()
     val busy by vm.busy.collectAsState()
     val conversations by vm.conversations.collectAsState()
     val currentId by vm.currentId.collectAsState()
     val settings by vm.settings.collectAsState()
+    val memories by vm.memories.collectAsState()
+    val knowledge by vm.knowledge.collectAsState()
 
     val context = LocalContext.current
     val listState = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
+    var plusOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
 
     val current = conversations.firstOrNull { it.id == currentId }
 
-    LaunchedEffect(messages.size, messages.lastOrNull()?.content?.length) {
+    LaunchedEffect(messages.size, messages.lastOrNull()?.content?.length, messages.lastOrNull()?.activities?.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.lastIndex)
         }
+    }
+
+    fun submit() {
+        val t = input.trim()
+        if (t.isEmpty() || busy) return
+        input = ""
+        vm.send(t)
     }
 
     Scaffold(
@@ -95,7 +113,8 @@ fun ChatScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = settings.model.ifBlank { "未设置模型" },
+                            text = settings.model.ifBlank { "未设置模型" } +
+                                " · 记忆 ${memories.size} · 知识 ${knowledge.size}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -105,7 +124,7 @@ fun ChatScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = "会话列表")
+                        Icon(Icons.Default.Menu, contentDescription = "菜单")
                     }
                 },
                 actions = {
@@ -120,6 +139,27 @@ fun ChatScreen(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("记忆库") },
+                                onClick = {
+                                    menuOpen = false
+                                    onNavigate(AppScreen.MEMORY)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("知识库") },
+                                onClick = {
+                                    menuOpen = false
+                                    onNavigate(AppScreen.KNOWLEDGE)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("工具与插件") },
+                                onClick = {
+                                    menuOpen = false
+                                    onNavigate(AppScreen.PLUGINS)
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("重命名会话") },
                                 onClick = {
@@ -209,34 +249,92 @@ fun ChatScreen(
                 }
             }
 
-            Surface(tonalElevation = 3.dp) {
+            // Agent 风格输入栏
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 2.dp
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.Bottom
+                        .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("说点什么…") },
-                        maxLines = 5,
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
+                    Box {
+                        IconButton(
+                            onClick = { plusOpen = true },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "更多",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(expanded = plusOpen, onDismissRequest = { plusOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("打开终端") },
+                                onClick = {
+                                    plusOpen = false
+                                    onNavigate(AppScreen.TERMINAL)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("看看记忆库") },
+                                onClick = {
+                                    plusOpen = false
+                                    onNavigate(AppScreen.MEMORY)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("清空输入") },
+                                onClick = {
+                                    plusOpen = false
+                                    input = ""
+                                }
+                            )
+                        }
+                    }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(22.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)
+                        ) {
+                            if (input.isEmpty()) {
+                                Text(
+                                    text = "给知微发消息…",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            BasicTextField(
+                                value = input,
+                                onValueChange = { input = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                textStyle = TextStyle(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                maxLines = 6,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(onSend = { submit() })
+                            )
+                        }
+                    }
+
                     FilledIconButton(
                         onClick = {
-                            if (busy) {
-                                vm.stopGenerating()
-                            } else {
-                                val t = input
-                                input = ""
-                                vm.send(t)
-                            }
+                            if (busy) vm.stopGenerating() else submit()
                         },
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(42.dp)
                     ) {
                         Icon(
                             imageVector = if (busy) Icons.Default.Clear else Icons.Default.Send,

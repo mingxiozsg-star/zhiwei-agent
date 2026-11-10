@@ -3,6 +3,7 @@ package com.zhiwei.agent.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,24 +12,21 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,25 +37,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhiwei.agent.ChatViewModel
 
-private val QUICK_COMMANDS = listOf(
-    "ls -al",
-    "pwd",
-    "df -h",
-    "getprop ro.product.model",
-    "cat /proc/meminfo | head -5",
-    "ps -A | head -20",
-    "date",
-    "id"
-)
+private val TermBg = Color(0xFF0B0E14)
+private val TermBar = Color(0xFF11151D)
+private val TermText = Color(0xFFD7DEE8)
+private val TermDim = Color(0xFF7B8798)
+private val TermCmd = Color(0xFF8BE9A1)
+private val TermErr = Color(0xFFFF8A80)
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** 普通终端的样子：黑底、等宽、一个提示符，没有卡片和气泡 */
 @Composable
-fun TerminalScreen(vm: ChatViewModel) {
+fun TerminalScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
     val lines by vm.terminalLines.collectAsState()
     val busy by vm.terminalBusy.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
@@ -67,123 +64,120 @@ fun TerminalScreen(vm: ChatViewModel) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex)
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Column {
-                    Text("终端", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = "应用沙箱权限 · 非 root",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            actions = {
-                IconButton(onClick = { vm.clearTerminal() }) {
-                    Icon(Icons.Default.Delete, contentDescription = "清空")
-                }
-            }
-        )
+    fun run() {
+        val cmd = input.trim()
+        if (cmd.isEmpty() || busy) return
+        input = ""
+        vm.runCommand(cmd)
+    }
 
-        LazyRow(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TermBg)
+    ) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .background(TermBar)
+                .statusBarsPadding()
+                .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            items(QUICK_COMMANDS) { cmd ->
-                AssistChip(
-                    onClick = { input = cmd },
-                    label = { Text(cmd, fontSize = 12.sp) }
+            IconButton(onClick = onOpenDrawer) {
+                Icon(Icons.Default.Menu, contentDescription = "菜单", tint = TermText)
+            }
+            Text(
+                text = "终端 · sh（应用沙箱）",
+                color = TermDim,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp
+            )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { vm.clearTerminal() }) {
+                Icon(Icons.Default.Delete, contentDescription = "清空", tint = TermText)
+            }
+        }
+
+        if (lines.isEmpty()) {
+            Column(modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
+                Text(
+                    text = "# 知微终端",
+                    color = TermCmd,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    text = "命令在当前应用沙箱内执行，工作目录是应用私有的 home。\n输入命令后回车，输出会直接跟在这一行下面。",
+                    color = TermDim,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
                 )
             }
-        }
-
-        Surface(
-            color = Color(0xFF10131A),
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-        ) {
-            if (lines.isEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "# 知微终端",
-                        color = Color(0xFF7FD1FF),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp
-                    )
-                    Spacer(Modifier.size(6.dp))
-                    Text(
-                        text = "命令在当前应用沙箱内执行，工作目录是应用私有的 home 目录。\n输入命令后点「执行」，或先点上面的快捷命令。",
-                        color = Color(0xFF8A93A6),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp
-                    )
-                }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(lines) { line ->
-                        Text(
-                            text = line.text,
-                            color = when {
-                                line.isCommand -> Color(0xFF7FD1FF)
-                                line.isError -> Color(0xFFFF8A80)
-                                else -> Color(0xFFD6E1EE)
-                            },
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.5.sp,
-                            lineHeight = 18.sp
-                        )
-                    }
-                }
-            }
-        }
-
-        Surface(tonalElevation = 3.dp) {
-            Row(
+        } else {
+            LazyColumn(
+                state = listState,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("输入 shell 命令") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(18.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        val cmd = input
-                        input = ""
-                        vm.runCommand(cmd)
-                    },
-                    enabled = !busy
-                ) {
-                    Text(if (busy) "执行中" else "执行")
+                items(lines) { line ->
+                    Text(
+                        text = line.text,
+                        color = when {
+                            line.isCommand -> TermCmd
+                            line.isError -> TermErr
+                            else -> TermText
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp
+                    )
                 }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(TermBar)
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "$",
+                color = TermCmd,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp
+            )
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                textStyle = TextStyle(
+                    color = TermText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp
+                ),
+                cursorBrush = SolidColor(TermCmd),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { run() })
+            )
+            IconButton(onClick = { run() }, enabled = !busy) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = "执行",
+                    tint = if (busy) TermDim else TermCmd
+                )
             }
         }
     }
 }
-
-private fun Modifier.imePaddingFix(): Modifier = this

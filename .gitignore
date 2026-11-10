@@ -22,3 +22,4 @@ build/
 # 本地 proot(aarch64) 专用构建工具，不入库
 tools/aapt2/
 tools/_*.py
+.kotlin/

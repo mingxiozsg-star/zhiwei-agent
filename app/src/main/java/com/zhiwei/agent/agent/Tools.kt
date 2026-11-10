@@ -7,6 +7,12 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import com.zhiwei.agent.data.AppSettings
+import com.zhiwei.agent.data.KnowledgeItem
+import com.zhiwei.agent.data.KnowledgeStore
+import com.zhiwei.agent.data.MemoryItem
+import com.zhiwei.agent.data.MemoryStore
+import com.zhiwei.agent.data.PluginStore
+import com.zhiwei.agent.data.PluginTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,7 +20,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,6 +44,25 @@ data class ToolSpec(
         )
     }
 }
+
+/** 一次工具执行的结果；顺带带回需要落库的记忆或知识 */
+data class ToolOutcome(
+    val text: String,
+    val newMemory: MemoryItem? = null,
+    val newKnowledge: KnowledgeItem? = null
+)
+
+/** 工具运行环境：设置 + 三个本地库的快照 */
+data class AgentEnv(
+    val context: Context,
+    val settings: AppSettings,
+    val memory: MemoryStore,
+    val knowledge: KnowledgeStore,
+    val pluginStore: PluginStore,
+    val memories: List<MemoryItem> = emptyList(),
+    val knowledgeList: List<KnowledgeItem> = emptyList(),
+    val pluginList: List<PluginTool> = emptyList()
+)
 
 private fun obj(vararg pairs: Pair<String, Any>): JSONObject {
     val o = JSONObject()
@@ -71,6 +95,10 @@ object ToolRegistry {
     const val TOOL_SHELL = "run_shell"
     const val TOOL_FETCH = "fetch_webpage"
     const val TOOL_SEARCH = "web_search"
+    const val TOOL_REMEMBER = "remember"
+    const val TOOL_RECALL = "recall"
+    const val TOOL_KB_SEARCH = "search_knowledge"
+    const val TOOL_KB_SAVE = "save_knowledge"
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -83,7 +111,8 @@ object ToolRegistry {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
 
-    fun specs(settings: AppSettings): List<ToolSpec> {
+    fun specs(env: AgentEnv): List<ToolSpec> {
+        val settings = env.settings
         val list = mutableListOf<ToolSpec>()
 
         list += ToolSpec(
@@ -128,6 +157,42 @@ object ToolRegistry {
             schema("url" to str("完整网址"), required = listOf("url"))
         )
 
+        list += ToolSpec(
+            TOOL_REMEMBER,
+            "记住",
+            "把用户透露的长期有用信息存进记忆库，之后任何对话都能用到。用户说「记住……」时用它。",
+            schema(
+                "text" to str("要记住的一句话，尽量简洁且自带上下文，例如「用户住在杭州」"),
+                "tags" to str("可选，逗号分隔的标签，例如 偏好,地址"),
+                required = listOf("text")
+            )
+        )
+
+        list += ToolSpec(
+            TOOL_RECALL,
+            "回忆",
+            "在记忆库里检索以前记下的信息。需要用户偏好、历史事实时先查它。",
+            schema("query" to str("检索关键词"), required = listOf("query"))
+        )
+
+        list += ToolSpec(
+            TOOL_KB_SEARCH,
+            "查知识库",
+            "在知识库里检索用户导入的资料、笔记、文档片段。",
+            schema("query" to str("检索关键词"), required = listOf("query"))
+        )
+
+        list += ToolSpec(
+            TOOL_KB_SAVE,
+            "存进知识库",
+            "把一段值得留存的资料写进知识库，方便以后跨对话检索。",
+            schema(
+                "title" to str("资料标题"),
+                "content" to str("资料正文"),
+                required = listOf("title", "content")
+            )
+        )
+
         if (settings.tavilyApiKey.isNotBlank()) {
             list += ToolSpec(
                 TOOL_SEARCH,
@@ -146,10 +211,21 @@ object ToolRegistry {
             )
         }
 
+        if (settings.enablePlugins) {
+            env.pluginList.filter { it.enabled }.forEach { p ->
+                list += ToolSpec(
+                    name = p.safeName(),
+                    label = p.name,
+                    description = p.description.ifBlank { "自定义工具：${p.name}" },
+                    parameters = p.paramsJson()
+                )
+            }
+        }
+
         return list
     }
 
-    fun labelOf(name: String): String = when (name) {
+    fun labelFor(env: AgentEnv, name: String): String = when (name) {
         TOOL_TIME -> "当前时间"
         TOOL_CALC -> "计算器"
         TOOL_DEVICE -> "设备信息"
@@ -158,36 +234,85 @@ object ToolRegistry {
         TOOL_SHELL -> "终端命令"
         TOOL_FETCH -> "抓取网页"
         TOOL_SEARCH -> "联网搜索"
-        else -> name
+        TOOL_REMEMBER -> "记住"
+        TOOL_RECALL -> "回忆"
+        TOOL_KB_SEARCH -> "查知识库"
+        TOOL_KB_SAVE -> "存进知识库"
+        else -> env.pluginList.firstOrNull { it.safeName() == name }?.name ?: name
     }
 
-    suspend fun execute(
-        context: Context,
-        settings: AppSettings,
-        name: String,
-        argsJson: String
-    ): String = withContext(Dispatchers.IO) {
-        val args = try {
-            if (argsJson.isBlank()) JSONObject() else JSONObject(argsJson)
-        } catch (_: Exception) {
-            JSONObject()
-        }
-        try {
-            when (name) {
-                TOOL_TIME -> currentTime()
-                TOOL_CALC -> calculate(args.optString("expression", ""))
-                TOOL_DEVICE -> deviceInfo(context)
-                TOOL_CLIPBOARD -> readClipboard(context)
-                TOOL_OPEN_URL -> openUrl(context, args.optString("url", ""))
-                TOOL_FETCH -> fetchPage(args.optString("url", ""))
-                TOOL_SEARCH -> search(settings, args.optString("query", ""))
-                TOOL_SHELL -> runShell(context, args.optString("command", ""))
-                else -> "未知工具：$name"
+    suspend fun execute(env: AgentEnv, name: String, argsJson: String): ToolOutcome =
+        withContext(Dispatchers.IO) {
+            val args = try {
+                if (argsJson.isBlank()) JSONObject() else JSONObject(argsJson)
+            } catch (_: Exception) {
+                JSONObject()
             }
-        } catch (e: Exception) {
-            "工具执行失败：${e.message}"
+            try {
+                val plugin = env.pluginList.firstOrNull { it.safeName() == name }
+                if (plugin != null) {
+                    return@withContext ToolOutcome(PluginRunner.execute(env, plugin, argsJson))
+                }
+                when (name) {
+                    TOOL_TIME -> ToolOutcome(currentTime())
+                    TOOL_CALC -> ToolOutcome(calculate(args.optString("expression", "")))
+                    TOOL_DEVICE -> ToolOutcome(deviceInfo(env.context))
+                    TOOL_CLIPBOARD -> ToolOutcome(readClipboard(env.context))
+                    TOOL_OPEN_URL -> ToolOutcome(openUrl(env.context, args.optString("url", "")))
+                    TOOL_FETCH -> ToolOutcome(fetchPage(args.optString("url", "")))
+                    TOOL_SEARCH -> ToolOutcome(search(env.settings, args.optString("query", "")))
+                    TOOL_SHELL -> ToolOutcome(runShell(env.context, args.optString("command", "")))
+                    TOOL_REMEMBER -> remember(args)
+                    TOOL_RECALL -> ToolOutcome(recall(env, args.optString("query", "")))
+                    TOOL_KB_SEARCH -> ToolOutcome(searchKnowledge(env, args.optString("query", "")))
+                    TOOL_KB_SAVE -> saveKnowledge(args)
+                    else -> ToolOutcome("未知工具：$name")
+                }
+            } catch (e: Exception) {
+                ToolOutcome("工具执行失败：${e.message}")
+            }
         }
+
+    // ---------- 记忆 / 知识库 ----------
+
+    private fun remember(args: JSONObject): ToolOutcome {
+        val text = args.optString("text", "").trim()
+        if (text.isEmpty()) return ToolOutcome("没有提供要记住的内容")
+        val tags = args.optString("tags", "")
+            .split(',', '，')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        return ToolOutcome(
+            text = "已记住：$text",
+            newMemory = MemoryItem(text = text, tags = tags, source = "对话")
+        )
     }
+
+    private fun recall(env: AgentEnv, query: String): String {
+        if (env.memories.isEmpty()) return "记忆库还是空的。"
+        val hits = env.memory.search(env.memories, query, 6)
+        if (hits.isEmpty()) return "记忆库里没有和「$query」相关的记录。"
+        return hits.joinToString("\n") { "- " + it.text }
+    }
+
+    private fun searchKnowledge(env: AgentEnv, query: String): String {
+        if (env.knowledgeList.isEmpty()) return "知识库还是空的。"
+        val hits = env.knowledge.search(env.knowledgeList, query, 4)
+        if (hits.isEmpty()) return "知识库里没有和「$query」相关的片段。"
+        return hits.joinToString("\n\n") { "【${it.title}】\n" + it.text.take(1200) }
+    }
+
+    private fun saveKnowledge(args: JSONObject): ToolOutcome {
+        val title = args.optString("title", "").trim().ifBlank { "未命名知识" }
+        val content = args.optString("content", "").trim()
+        if (content.isEmpty()) return ToolOutcome("没有提供正文")
+        return ToolOutcome(
+            text = "已存进知识库：$title（${content.length} 字）",
+            newKnowledge = KnowledgeItem(title = title, content = content, source = "对话")
+        )
+    }
+
+    // ---------- 基础工具实现 ----------
 
     /** 表达式求值：递归下降，支持 + - * / % 与括号、小数 */
     private fun calculate(expr: String): String {
@@ -385,7 +510,7 @@ object ToolRegistry {
             .replace("&amp;", "&")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
-            .replace("&quot;", "\"")
+            .replace("&" + "quot;", "\"")
             .replace("&#39;", "'")
         s = s.replace(Regex("[ \\t\\x0B\\f\\r]+"), " ")
         s = s.replace(Regex(" *\\n *"), "\n")
