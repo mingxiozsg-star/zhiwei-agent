@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
@@ -98,12 +97,7 @@ fun ConversationDrawer(
             selected = screen == AppScreen.CHAT,
             onClick = { onNavigate(AppScreen.CHAT) }
         )
-        DrawerNavRow(
-            icon = Icons.Default.Build,
-            label = "终端",
-            selected = screen == AppScreen.TERMINAL,
-            onClick = { onNavigate(AppScreen.TERMINAL) }
-        )
+        // 「AI 电脑」（终端）与「工作区」的入口放在聊天页的输入栏上，这里不再重复放一份
         DrawerNavRow(
             icon = Icons.Default.Star,
             label = "记忆库",

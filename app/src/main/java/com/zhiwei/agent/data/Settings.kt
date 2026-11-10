@@ -11,7 +11,26 @@ const val COLLAPSE_NONE = "none"
 const val COLLAPSE_SINGLE = "single"
 const val COLLAPSE_MULTI = "multi"
 
+/** 系统提示词版本：升级时只在用户没改过的情况下换成新版 */
+const val SYSTEM_PROMPT_VERSION = 2
+
+/**
+ * v2 提示词。吸收了主流智能体（Claude Code / Manus / Cursor 一类）的共同做法：
+ * 先结论、能查就查、多步先列计划、工具报错不算任务结束、不可逆操作先确认。
+ */
 const val DEFAULT_SYSTEM_PROMPT =
+    "你是知微，运行在手机上的 AI 智能体。你可以调用工具，也能操控这台设备（音量、亮度、手电筒、震动、应用、终端）。\n" +
+        "工作方式：\n" +
+        "1. 先给结论，再补关键理由；不寒暄、不复述问题、不说「作为一个 AI」。\n" +
+        "2. 能自己查的就自己查：时间、计算、设备状态、记忆、知识库、网页内容，直接调工具，不要凭记忆猜。\n" +
+        "3. 多步任务先用一行列出 2~5 步计划，再一步步做完；每步给一句进度，做完再收尾，不要中途停下等用户催。\n" +
+        "4. 工具报错不等于任务结束：读懂错误，换个参数或换个办法再试；确实做不到，说清卡在哪一步、需要用户做什么。\n" +
+        "5. 不编造事实、链接、数据和 API；不确定就直说不确定，并给出验证办法。\n" +
+        "6. 默认中文回答；代码用代码块并标注语言；长内容先给摘要再给细节。\n" +
+        "7. 删除、支付、发送给他人这类不可逆操作，先说明再执行。"
+
+/** v1 的老提示词，只用于升级时判断用户有没有自己改过 */
+private const val LEGACY_SYSTEM_PROMPT_V1 =
     "你是知微，一个高效、精准的手机端智能体。\n" +
         "规则：\n" +
         "1. 先给结论，再补关键理由，不说客套话和填充语。\n" +
@@ -49,6 +68,10 @@ data class AppSettings(
     val enableDeviceTools: Boolean = true,
     val tavilyApiKey: String = "",
     val toolMaxRounds: Int = 12,
+    /** 服务商报错（超时、限流、5xx、断连）时的自动重试次数，0 = 不重试 */
+    val retryCount: Int = 6,
+    /** 重试用完仍失败时，自动补一轮「继续」接着做，不直接中断任务 */
+    val autoResumeAfterFailure: Boolean = true,
     /** 每次请求最多带上的历史消息条数 */
     val contextLimit: Int = 24,
 
@@ -131,13 +154,15 @@ class SettingsStore(context: Context) {
         frequencyPenalty = sp.getFloat("frequencyPenalty", 0f),
         presencePenalty = sp.getFloat("presencePenalty", 0f),
         nativeToolCall = sp.getBoolean("nativeToolCall", true),
-        systemPrompt = sp.getString("systemPrompt", null) ?: DEFAULT_SYSTEM_PROMPT,
+        systemPrompt = loadSystemPrompt(),
         streamOutput = sp.getBoolean("streamOutput", true),
         enableTools = sp.getBoolean("enableTools", true),
         enableShellTool = sp.getBoolean("enableShellTool", false),
         enableDeviceTools = sp.getBoolean("enableDeviceTools", true),
         tavilyApiKey = sp.getString("tavilyApiKey", "") ?: "",
         toolMaxRounds = sp.getInt("toolMaxRounds", 12),
+        retryCount = sp.getInt("retryCount", 6),
+        autoResumeAfterFailure = sp.getBoolean("autoResumeAfterFailure", true),
         contextLimit = sp.getInt("contextLimit", 24),
         autoMemory = sp.getBoolean("autoMemory", true),
         memoryTopK = sp.getInt("memoryTopK", 4),
@@ -156,6 +181,22 @@ class SettingsStore(context: Context) {
         hapticOnSend = sp.getBoolean("hapticOnSend", true)
     )
 
+    /**
+     * 系统提示词升级：只在用户没动过（还是老版本默认文案）时才换成新版，
+     * 用户自己改过的一律原样保留，不覆盖。
+     */
+    private fun loadSystemPrompt(): String {
+        val saved = sp.getString("systemPrompt", null)
+        val version = sp.getInt("systemPromptVersion", 1)
+        if (saved.isNullOrBlank()) return DEFAULT_SYSTEM_PROMPT
+        if (version < SYSTEM_PROMPT_VERSION &&
+            (saved == LEGACY_SYSTEM_PROMPT_V1 || saved == DEFAULT_SYSTEM_PROMPT)
+        ) {
+            return DEFAULT_SYSTEM_PROMPT
+        }
+        return saved
+    }
+
     fun save(s: AppSettings) {
         sp.edit()
             .putString("baseUrl", s.baseUrl)
@@ -170,12 +211,15 @@ class SettingsStore(context: Context) {
             .putFloat("presencePenalty", s.presencePenalty)
             .putBoolean("nativeToolCall", s.nativeToolCall)
             .putString("systemPrompt", s.systemPrompt)
+            .putInt("systemPromptVersion", SYSTEM_PROMPT_VERSION)
             .putBoolean("streamOutput", s.streamOutput)
             .putBoolean("enableTools", s.enableTools)
             .putBoolean("enableShellTool", s.enableShellTool)
             .putBoolean("enableDeviceTools", s.enableDeviceTools)
             .putString("tavilyApiKey", s.tavilyApiKey)
             .putInt("toolMaxRounds", s.toolMaxRounds)
+            .putInt("retryCount", s.retryCount)
+            .putBoolean("autoResumeAfterFailure", s.autoResumeAfterFailure)
             .putInt("contextLimit", s.contextLimit)
             .putBoolean("autoMemory", s.autoMemory)
             .putInt("memoryTopK", s.memoryTopK)

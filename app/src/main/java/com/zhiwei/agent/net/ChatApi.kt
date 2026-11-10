@@ -7,6 +7,7 @@ import com.zhiwei.agent.data.ROLE_ASSISTANT
 import com.zhiwei.agent.data.ROLE_TOOL
 import com.zhiwei.agent.data.ToolCall
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,12 +19,18 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.min
+import kotlin.random.Random
 
 /** 流式对话过程中产生的事件 */
 sealed class ChatEvent {
     data class Delta(val text: String) : ChatEvent()
     data class ToolCalls(val calls: List<ToolCall>) : ChatEvent()
     data class Usage(val prompt: Int, val completion: Int) : ChatEvent()
+    /** 第 attempt 次重试（一共 total 次），reason 是上一次失败的原因 */
+    data class Retry(val attempt: Int, val total: Int, val reason: String) : ChatEvent()
+    /** 重试前要求上层丢掉上一次尝试已经流出的半截内容 */
+    object Restart : ChatEvent()
     data class Failure(val message: String) : ChatEvent()
     object Completed : ChatEvent()
 }
@@ -38,7 +45,8 @@ data class ChatResult(
 
 /**
  * OpenAI 兼容协议的客户端。
- * 支持 /v1/chat/completions 的 SSE 增量返回、function calling 与多 Key 轮换。
+ * 支持 /v1/chat/completions 的 SSE 增量返回、function calling、多 Key 轮换，
+ * 以及「服务商报错就换 Key 重试」的容错逻辑（重试次数在设置里调）。
  */
 class ChatApi {
 
@@ -72,15 +80,68 @@ class ChatApi {
         return keys[Math.floorMod(i, keys.size)]
     }
 
-    /** 非流式备用通道，用于记忆抽取、总结等一次性请求 */
+    /**
+     * 第 attempt 次尝试（从 0 开始）该用哪个 Key。
+     * 池子里有多个 Key 时，重试一定会换 Key —— 限流或单 Key 失效时这才有意义。
+     */
+    private fun keyForAttempt(s: AppSettings, attempt: Int): String {
+        val keys = s.usableKeys()
+        if (keys.isEmpty()) return ""
+        if (keys.size == 1) return keys.first()
+        if (attempt == 0 && !s.keyRotation) return keys.first()
+        return keys[Math.floorMod(rotation.getAndIncrement(), keys.size)]
+    }
+
+    /** 重试间隔：线性退避 + 抖动，最长 6 秒 */
+    private fun backoffMs(attempt: Int): Long {
+        val base = min(900L * attempt, 6000L)
+        return base + Random.nextLong(0, 400)
+    }
+
+    /** 哪些错误值得重试 */
+    private fun retryableCode(code: Int, keyPoolSize: Int): Boolean = when {
+        code == 408 || code == 409 || code == 425 || code == 429 -> true
+        code in 500..599 -> true
+        // Key 失效 / 无权限：池子里还有别的 Key 就换一个接着试
+        code == 401 || code == 403 -> keyPoolSize > 1
+        else -> false
+    }
+
+    private data class AttemptError(val message: String, val retryable: Boolean)
+
+    /**
+     * 非流式备用通道，用于记忆抽取、总结等一次性请求。
+     * 同样带重试，但次数收敛到 4 次，免得后台任务拖太久。
+     */
     suspend fun chatOnce(
         settings: AppSettings,
         history: List<ChatMessage>,
         tools: List<ToolSpec>
     ): Result<ChatResult> = withContext(Dispatchers.IO) {
+        val retries = settings.retryCount.coerceIn(0, 4)
+        var last: String? = null
+        var attempt = 0
+        while (true) {
+            val r = chatOnceAttempt(settings, history, tools, keyForAttempt(settings, attempt))
+            r.onSuccess { return@withContext Result.success(it) }
+            val e = r.exceptionOrNull()
+            last = e?.message ?: e?.javaClass?.simpleName
+            if (attempt >= retries) break
+            attempt++
+            delay(backoffMs(attempt))
+        }
+        Result.failure(IOException(last ?: "请求失败"))
+    }
+
+    private suspend fun chatOnceAttempt(
+        settings: AppSettings,
+        history: List<ChatMessage>,
+        tools: List<ToolSpec>,
+        key: String
+    ): Result<ChatResult> = withContext(Dispatchers.IO) {
         try {
             val body = buildBody(settings, history, tools, stream = false)
-            val request = buildRequest(settings, body, pickKey(settings))
+            val request = buildRequest(settings, body, key)
             val call = client.newCall(request)
             activeCall = call
             call.execute().use { resp ->
@@ -89,13 +150,22 @@ class ChatApi {
                     return@withContext Result.failure(IOException(describeHttpError(resp.code, text)))
                 }
                 val json = JSONObject(text)
-                val msg = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+                val choice = json.optJSONArray("choices")?.optJSONObject(0)
+                val msg = choice?.optJSONObject("message") ?: choice?.optJSONObject("delta")
                 val content = if (msg == null || msg.isNull("content")) "" else msg.optString("content", "")
                 val calls = parseToolCalls(msg?.optJSONArray("tool_calls"))
                 val usage = json.optJSONObject("usage")
+                val fixed = if (content.isBlank() && calls.isEmpty()) {
+                    // 有些模型只把思考写进 reasoning_content，别当成空结果
+                    val think = msg?.optString("reasoning_content", "")?.takeIf { it.isNotBlank() }
+                        ?: msg?.optString("reasoning", "")
+                    if (think.isNullOrBlank()) content else think
+                } else {
+                    content
+                }
                 Result.success(
                     ChatResult(
-                        content = content,
+                        content = fixed,
                         toolCalls = calls,
                         promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
                         completionTokens = usage?.optInt("completion_tokens", 0) ?: 0
@@ -113,6 +183,7 @@ class ChatApi {
 
     /**
      * 流式对话。onEvent 会在 IO 线程被顺序调用，调用方直接更新 StateFlow 即可。
+     * 失败会按设置里的次数自动重试（换 Key + 退避），全部失败才发 Failure。
      */
     suspend fun streamChat(
         settings: AppSettings,
@@ -120,93 +191,190 @@ class ChatApi {
         tools: List<ToolSpec>,
         onEvent: (ChatEvent) -> Unit
     ) = withContext(Dispatchers.IO) {
+        val retries = settings.retryCount.coerceIn(0, 10)
+        var lastError: AttemptError? = null
+        var attempt = 0
+        while (true) {
+            val err = streamOnce(settings, history, tools, keyForAttempt(settings, attempt), onEvent)
+            if (err == null) return@withContext
+            lastError = err
+            if (attempt >= retries || !err.retryable) break
+            attempt++
+            onEvent(ChatEvent.Retry(attempt, retries, err.message))
+            onEvent(ChatEvent.Restart)
+            delay(backoffMs(attempt))
+        }
+        onEvent(ChatEvent.Failure(lastError.message))
+    }
+
+    /** 单次尝试；返回 null 表示成功，否则是失败详情 */
+    private suspend fun streamOnce(
+        settings: AppSettings,
+        history: List<ChatMessage>,
+        tools: List<ToolSpec>,
+        key: String,
+        onEvent: (ChatEvent) -> Unit
+    ): AttemptError? {
         val body = buildBody(settings, history, tools, stream = true)
-        val request = buildRequest(settings, body, pickKey(settings))
+        val request = buildRequest(settings, body, key)
         val call = client.newCall(request)
         activeCall = call
         try {
             call.execute().use { resp ->
+                val raw = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
-                    val errText = resp.body?.string() ?: ""
-                    onEvent(ChatEvent.Failure(describeHttpError(resp.code, errText)))
-                    return@use
+                    return AttemptError(
+                        describeHttpError(resp.code, raw),
+                        retryableCode(resp.code, settings.usableKeys().size)
+                    )
                 }
-                val source = resp.body?.source()
-                if (source == null) {
-                    onEvent(ChatEvent.Failure("响应为空"))
-                    return@use
+                if (raw.isBlank()) return AttemptError("服务商返回了空响应", true)
+
+                // 有的网关不认 stream=true，直接回一整段 JSON —— 这里兜住，
+                // 否则会出现「额度扣了，界面却什么都没显示」。
+                val err = if (raw.contains("data:")) {
+                    handleStreamBody(raw, onEvent)
+                } else {
+                    handleWholeBody(raw, onEvent)
                 }
-                val toolAcc = LinkedHashMap<Int, ToolCallBuilder>()
-                while (true) {
-                    val line = source.readUtf8Line() ?: break
-                    if (line.isBlank()) continue
-                    if (line.startsWith(":")) continue
-                    if (!line.startsWith("data:")) continue
-                    val payload = line.substring(5).trim()
-                    if (payload == "[DONE]") break
-                    val json = try {
-                        JSONObject(payload)
-                    } catch (_: Exception) {
-                        continue
-                    }
-                    // 有的网关会把用量塞在最后一个 chunk 里
-                    json.optJSONObject("usage")?.let { u ->
-                        val p = u.optInt("prompt_tokens", 0)
-                        val c = u.optInt("completion_tokens", 0)
-                        if (p > 0 || c > 0) onEvent(ChatEvent.Usage(p, c))
-                    }
-                    val delta = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
-                        ?: continue
-                    if (!delta.isNull("content")) {
-                        val piece = delta.optString("content", "")
-                        if (piece.isNotEmpty()) onEvent(ChatEvent.Delta(piece))
-                    }
-                    val tcs = delta.optJSONArray("tool_calls")
-                    if (tcs != null) {
-                        for (i in 0 until tcs.length()) {
-                            val t = tcs.optJSONObject(i) ?: continue
-                            val idx = t.optInt("index", i)
-                            val b = toolAcc.getOrPut(idx) { ToolCallBuilder() }
-                            if (!t.isNull("id")) {
-                                val id = t.optString("id", "")
-                                if (id.isNotEmpty()) b.id = id
-                            }
-                            val fn = t.optJSONObject("function")
-                            if (fn != null) {
-                                if (!fn.isNull("name")) {
-                                    val n = fn.optString("name", "")
-                                    if (n.isNotEmpty()) b.name = n
-                                }
-                                if (!fn.isNull("arguments")) {
-                                    b.args.append(fn.optString("arguments", ""))
-                                }
-                            }
-                        }
-                    }
-                }
-                if (toolAcc.isNotEmpty()) {
-                    val calls = toolAcc.values.filter { it.name.isNotBlank() }.map {
-                        ToolCall(
-                            id = it.id.ifBlank { "call_" + System.currentTimeMillis() },
-                            name = it.name,
-                            arguments = it.args.toString().ifBlank { "{}" }
-                        )
-                    }
-                    onEvent(ChatEvent.ToolCalls(calls))
-                }
+                if (err != null) return err
                 onEvent(ChatEvent.Completed)
+                return null
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             if (call.isCanceled()) {
                 onEvent(ChatEvent.Completed)
-            } else {
-                onEvent(ChatEvent.Failure(e.message ?: e.javaClass.simpleName))
+                return null
             }
+            return AttemptError(e.message ?: e.javaClass.simpleName, true)
         } finally {
             activeCall = null
         }
+    }
+
+    /** 累积器：正文、思考、工具调用 */
+    private class Chunk {
+        val text = StringBuilder()
+        val reasoning = StringBuilder()
+        var sawUsage: Pair<Int, Int>? = null
+        val toolAcc = LinkedHashMap<Int, ToolCallBuilder>()
+    }
+
+    /** 解析 SSE 正文（逐行 data:） */
+    private fun handleStreamBody(raw: String, onEvent: (ChatEvent) -> Unit): AttemptError? {
+        val c = Chunk()
+        raw.lineSequence().forEach { line ->
+            val l = line.trim()
+            if (l.isEmpty() || l.startsWith(":") || !l.startsWith("data:")) return@forEach
+            val payload = l.substring(5).trim()
+            if (payload.isEmpty() || payload == "[DONE]") return@forEach
+            val json = try {
+                JSONObject(payload)
+            } catch (_: Exception) {
+                return@forEach
+            }
+            readUsage(json, c)
+            val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return@forEach
+            val delta = choice.optJSONObject("delta") ?: choice.optJSONObject("message") ?: return@forEach
+            readText(delta, c, onEvent)
+            readToolCalls(delta.optJSONArray("tool_calls"), c)
+        }
+        return finishChunk(c, onEvent)
+    }
+
+    /** 解析一次性返回的整段 JSON */
+    private fun handleWholeBody(raw: String, onEvent: (ChatEvent) -> Unit): AttemptError? {
+        val c = Chunk()
+        val json = try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            return AttemptError("看不懂服务商返回的内容：${raw.take(200)}", false)
+        }
+        readUsage(json, c)
+        val choice = json.optJSONArray("choices")?.optJSONObject(0)
+        val msg = choice?.optJSONObject("message") ?: choice?.optJSONObject("delta")
+        if (msg != null) {
+            readText(msg, c, onEvent)
+            readToolCalls(msg.optJSONArray("tool_calls"), c)
+        }
+        return finishChunk(c, onEvent)
+    }
+
+    private fun readUsage(json: JSONObject, c: Chunk) {
+        json.optJSONObject("usage")?.let { u ->
+            val p = u.optInt("prompt_tokens", 0)
+            val comp = u.optInt("completion_tokens", 0)
+            if (p > 0 || comp > 0) c.sawUsage = p to comp
+        }
+    }
+
+    private fun readText(node: JSONObject, c: Chunk, onEvent: (ChatEvent) -> Unit) {
+        if (!node.isNull("content")) {
+            val piece = node.optString("content", "")
+            if (piece.isNotEmpty()) {
+                c.text.append(piece)
+                onEvent(ChatEvent.Delta(piece))
+            }
+        }
+        // thinking 类模型：正文可能是空的，思考写在 reasoning_content / reasoning 里
+        for (k in listOf("reasoning_content", "reasoning")) {
+            if (!node.isNull(k)) {
+                val r = node.optString(k, "")
+                if (r.isNotEmpty()) c.reasoning.append(r)
+            }
+        }
+    }
+
+    private fun readToolCalls(tcs: JSONArray?, c: Chunk) {
+        if (tcs == null) return
+        for (i in 0 until tcs.length()) {
+            val t = tcs.optJSONObject(i) ?: continue
+            val idx = t.optInt("index", i)
+            val b = c.toolAcc.getOrPut(idx) { ToolCallBuilder() }
+            if (!t.isNull("id")) {
+                val id = t.optString("id", "")
+                if (id.isNotEmpty()) b.id = id
+            }
+            val fn = t.optJSONObject("function") ?: continue
+            if (!fn.isNull("name")) {
+                val n = fn.optString("name", "")
+                if (n.isNotEmpty()) b.name = n
+            }
+            if (!fn.isNull("arguments")) {
+                b.args.append(fn.optString("arguments", ""))
+            }
+        }
+    }
+
+    /**
+     * 收尾：处理「只回了思考」和「什么都没回」两种情况。
+     * 以前空白回复会静默结束（界面空白但额度已经扣了），现在当成可重试的错误。
+     */
+    private fun finishChunk(c: Chunk, onEvent: (ChatEvent) -> Unit): AttemptError? {
+        c.sawUsage?.let { (p, comp) -> onEvent(ChatEvent.Usage(p, comp)) }
+
+        if (c.text.isBlank() && c.reasoning.isNotBlank()) {
+            val think = c.reasoning.toString().trim()
+            val note = "（模型没有返回正文，下面是它的思考内容）\n$think"
+            c.text.append(note)
+            onEvent(ChatEvent.Delta(note))
+        }
+
+        val calls = c.toolAcc.values.filter { it.name.isNotBlank() }.map {
+            ToolCall(
+                id = it.id.ifBlank { "call_" + System.currentTimeMillis() + "_" + it.name },
+                name = it.name,
+                arguments = it.args.toString().ifBlank { "{}" }
+            )
+        }
+        if (calls.isNotEmpty()) onEvent(ChatEvent.ToolCalls(calls))
+
+        if (c.text.isBlank() && calls.isEmpty()) {
+            return AttemptError("服务商返回了空内容：既没有正文，也没有工具调用", true)
+        }
+        return null
     }
 
     /** 拉取服务端模型列表 */
@@ -325,7 +493,7 @@ class ChatApi {
         keep.forEach { m ->
             when (m.role) {
                 ROLE_ASSISTANT -> {
-                    val acts = m.activities
+                    val acts = m.activities.filter { it.name.isNotBlank() }
                     val calls = if (m.toolCalls.isNotEmpty()) {
                         m.toolCalls
                     } else {
@@ -337,6 +505,9 @@ class ChatApi {
                             )
                         }
                     }
+                    // 既没正文也没有工具调用：空 assistant 消息会被部分服务商判 400，直接跳过
+                    if (calls.isEmpty() && m.content.isBlank()) return@forEach
+
                     val o = JSONObject()
                     o.put("role", "assistant")
                     if (m.content.isBlank() && calls.isNotEmpty()) {
@@ -390,9 +561,13 @@ class ChatApi {
     private fun describeHttpError(code: Int, body: String): String {
         val snippet = body.trim().let { if (it.length > 400) it.substring(0, 400) + "…" else it }
         val hint = when (code) {
+            400 -> "请求被拒绝，检查模型名与参数"
             401 -> "API Key 无效或未填写"
             403 -> "该 Key 无权限访问此模型"
             404 -> "接口地址不对，检查「API 地址」是否包含 /v1"
+            408 -> "服务端超时"
+            413 -> "请求体过大，把「每次带上的历史消息」调小"
+            422 -> "参数不合法，可能该模型不支持某个参数"
             429 -> "请求过于频繁或额度用尽"
             in 500..599 -> "服务端错误"
             else -> ""

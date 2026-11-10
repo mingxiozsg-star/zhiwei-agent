@@ -54,6 +54,7 @@ import com.zhiwei.agent.ui.MemoryScreen
 import com.zhiwei.agent.ui.PluginsScreen
 import com.zhiwei.agent.ui.SettingsScreen
 import com.zhiwei.agent.ui.TerminalScreen
+import com.zhiwei.agent.ui.WorkspaceScreen
 import com.zhiwei.agent.ui.theme.ZhiweiAgentTheme
 import kotlin.math.roundToInt
 
@@ -97,7 +98,7 @@ fun ZhiweiApp(vm: ChatViewModel) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.3.0"
+        }.getOrNull() ?: "1.4.0"
     }
 
     val view = LocalView.current
@@ -155,11 +156,16 @@ fun ZhiweiApp(vm: ChatViewModel) {
                                     drawerOpen = false
                                 }
                             )
-
                             AppScreen.TERMINAL -> TerminalScreen(
                                 vm = vm,
                                 onOpenDrawer = { drawerOpen = true }
                             )
+
+                            AppScreen.WORKSPACE -> WorkspaceScreen(
+                                vm = vm,
+                                onOpenDrawer = { drawerOpen = true }
+                            )
+
 
                             AppScreen.MEMORY -> MemoryScreen(
                                 vm = vm,

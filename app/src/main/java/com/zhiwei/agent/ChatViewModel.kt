@@ -34,6 +34,8 @@ import com.zhiwei.agent.data.ToolCall
 import com.zhiwei.agent.data.UsageSnapshot
 import com.zhiwei.agent.net.ChatApi
 import com.zhiwei.agent.net.ChatEvent
+import com.zhiwei.agent.net.UpdateChecker
+import com.zhiwei.agent.net.UpdateState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +46,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 data class TerminalLine(
     val text: String,
@@ -52,7 +55,16 @@ data class TerminalLine(
 )
 
 /** 抽屉里的功能页 */
-enum class AppScreen { CHAT, TERMINAL, MEMORY, KNOWLEDGE, PLUGINS, SETTINGS }
+enum class AppScreen { CHAT, TERMINAL, WORKSPACE, MEMORY, KNOWLEDGE, PLUGINS, SETTINGS }
+
+/** 工作区里的一个条目 */
+data class WorkspaceEntry(
+    val name: String,
+    val path: String,
+    val size: Long,
+    val modified: Long,
+    val isDir: Boolean
+)
 
 private const val EXTRACT_PROMPT =
     "你是记忆抽取器。从下面的对话里找出值得长期记住的事实：用户的身份、偏好、习惯、长期目标、重要约定、正在做的项目。\n" +
@@ -122,6 +134,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 提示词库：聊天页点一下就填进输入框 */
     private val _prompts = MutableStateFlow<List<PromptTemplate>>(emptyList())
     val prompts: StateFlow<List<PromptTemplate>> = _prompts.asStateFlow()
+    /** 当前网络状态（重试进度），空表示正常 */
+    private val _netStatus = MutableStateFlow<String?>(null)
+    val netStatus: StateFlow<String?> = _netStatus.asStateFlow()
+    /** 工作区（智能体的 home 目录） */
+    private val _workspace = MutableStateFlow<List<WorkspaceEntry>>(emptyList())
+    val workspace: StateFlow<List<WorkspaceEntry>> = _workspace.asStateFlow()
+    /** 正在查看的文件：标题 -> 内容 */
+    private val _workspacePreview = MutableStateFlow<Pair<String, String>?>(null)
+    val workspacePreview: StateFlow<Pair<String, String>?> = _workspacePreview.asStateFlow()
+    /** 更新检查结果 */
+    private val _update = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    val update: StateFlow<UpdateState> = _update.asStateFlow()
     private val statsLock = Any()
 
     private var runJob: Job? = null
@@ -314,6 +338,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 _busy.value = false
                 runJob = null
+                _netStatus.value = null
                 setMessages(
                     _messages.value.map { if (it.streaming) it.copy(streaming = false) else it },
                     persist = true
@@ -344,11 +369,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val freeTools = tools.filter { it.free }.map { it.name }.toSet()
         // 同一次提问里，同参数的工具只真跑一遍；模型再要就复用结果，不重复执行
         val seenCalls = HashMap<String, String>()
+        // 免费工具不占预算，光靠预算拦不住死循环，再加一道步数硬上限
+        val maxRounds = (settings.toolMaxRounds + 8).coerceIn(8, 40)
+        var rounds = 0
+        // 服务商全报错时自动续跑的轮数（最多两次，避免无限循环）
+        var autoResumes = 0
+        // 模型反复要求同一批工具调用（全部命中缓存）时，不再陪它空转
+        var noProgress = 0
         while (true) {
+            rounds++
+            if (rounds > maxRounds) {
+                text.append("\n\n（这一回合已经跑了 $maxRounds 步，先停在这儿，免得空转烧额度。回一句「继续」我就接着做。）")
+                replaceLocal(placeholder.id) { it.copy(content = text.toString()) }
+                break
+            }
             var calls: List<ToolCall> = emptyList()
             var failure: String? = null
             val base = text.toString()
-            val roundText = StringBuilder()
+            var roundText = StringBuilder()
             val snapshot = _messages.value
             // 本回合前面几轮已经跑过的工具调用必须带进历史，否则模型看不到结果，
             // 会以为工具没生效，一遍遍重调同一个工具。
@@ -372,10 +410,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
                     is ChatEvent.ToolCalls -> calls = event.calls
                     is ChatEvent.Usage -> pendingUsage = event
+                    is ChatEvent.Retry -> {
+                        _netStatus.value = "第 ${event.attempt}/${event.total} 次重试：${brief(event.reason)}"
+                    }
+                    ChatEvent.Restart -> {
+                        // 上一次尝试的半截输出丢掉，免得重试后内容重复
+                        roundText = StringBuilder()
+                        replaceLocal(placeholder.id) { it.copy(content = base, streaming = true) }
+                    }
                     is ChatEvent.Failure -> failure = event.message
                     ChatEvent.Completed -> Unit
                 }
             }
+            _netStatus.value = null
             pendingUsage?.let { u ->
                 recordUsage(effective.model, u.prompt, u.completion)
                 pendingUsage = null
@@ -383,6 +430,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             if (failure != null) {
                 val body = (base + roundText.toString()).trim()
+                // 服务商报错不等于任务结束：先自己补一轮，别直接把任务掐了
+                if (settings.autoResumeAfterFailure && autoResumes < 2) {
+                    autoResumes++
+                    text.setLength(0)
+                    text.append(body)
+                    if (text.isNotEmpty()) text.append("\n\n")
+                    text.append("（连接失败：${brief(failure)}，已自动继续）\n")
+                    replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = true) }
+                    _notice.value = "服务商报错，已自动继续：${brief(failure)}"
+                    continue
+                }
                 replaceLocal(placeholder.id) {
                     it.copy(
                         content = if (body.isEmpty()) "请求失败：$failure" else body,
@@ -397,6 +455,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = true) }
 
             if (calls.isEmpty()) break
+
+            // 全部命中缓存 = 模型在原地打转，再陪它跑就是白烧额度
+            val fresh = calls.count { seenCalls[it.name + "\u0000" + it.arguments.trim()] == null }
+            noProgress = if (fresh == 0) noProgress + 1 else 0
+            if (noProgress >= 2) {
+                text.append(
+                    "\n\n（模型在重复请求同一批工具调用，已经停下，免得空转烧额度。" +
+                        "回一句「继续」，或者换个说法再问一次。）"
+                )
+                replaceLocal(placeholder.id) { it.copy(content = text.toString()) }
+                break
+            }
 
             val cost = calls.count { it.name !in freeTools }
             if (budgetUsed > 0 && budgetUsed + cost > settings.toolMaxRounds) {
@@ -450,9 +520,28 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = false) }
+        // 收尾：一个字都没有、只调了工具时别留空气泡
+        // （以前这种情况看起来就是「额度扣了但没有任何输出」）
+        val finalText = text.toString().trim()
+        val acts = _messages.value.firstOrNull { it.id == placeholder.id }?.activities.orEmpty()
+        val blank = finalText.isBlank()
+        val finalContent = when {
+            !blank -> finalText
+            acts.isNotEmpty() -> "（模型只调用了工具，没有返回文字说明。回一句「继续」让它接着往下做。）"
+            else -> "（模型没有返回任何内容。回一句「继续」再试一次；一直这样就去检查接口地址与模型名。）"
+        }
+        replaceLocal(placeholder.id) {
+            it.copy(content = finalContent, streaming = false, isError = it.isError || blank)
+        }
+        _netStatus.value = null
         persistNow()
         maybeExtractMemory()
+    }
+
+    /** 把报错信息压成一小行，别把整段 JSON 塞进界面 */
+    private fun brief(text: String?): String {
+        val t = (text ?: "").replace('\n', ' ').trim()
+        return if (t.length > 120) t.take(120) + "…" else t
     }
 
     /** 同一次提问里重复调用同一工具（参数也一样）时，直接复用上次结果，不真跑第二遍 */
@@ -542,9 +631,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun maybeExtractMemory() {
         val settings = _settings.value
         if (!settings.autoMemory) return
-        if (settings.apiKey.isBlank() && !settings.baseUrl.contains("localhost")) {
-            // 本地接口不需要 key，其他情况没 key 就没法抽取
-        }
+        if (settings.usableKeys().isEmpty()) return
         val msgs = _messages.value
         val userMsgs = msgs.filter { it.role == ROLE_USER }
         if (userMsgs.isEmpty()) return
@@ -931,4 +1018,104 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     } catch (_: Exception) {
         null
     }
+
+    // ---------- 继续执行 ----------
+
+    /** 上一轮失败或中途停下时，点「继续」接着做 */
+    fun continueRun(text: String = "继续") {
+        if (_busy.value) return
+        send(text)
+    }
+
+    // ---------- 工作区：智能体的 home 目录 ----------
+
+    fun workspaceDir(): String =
+        ShellRunner.homeDir(getApplication<Application>().filesDir).absolutePath
+
+    fun refreshWorkspace() {
+        viewModelScope.launch {
+            val root = ShellRunner.homeDir(getApplication<Application>().filesDir)
+            _workspace.value = withContext(Dispatchers.IO) { listWorkspace(root) }
+        }
+    }
+
+    private fun listWorkspace(root: File): List<WorkspaceEntry> {
+        val files = root.listFiles() ?: return emptyList()
+        return files.map { f ->
+            WorkspaceEntry(
+                name = f.name,
+                path = f.absolutePath,
+                size = if (f.isDirectory) 0L else f.length(),
+                modified = f.lastModified(),
+                isDir = f.isDirectory
+            )
+        }.sortedWith(
+            compareByDescending<WorkspaceEntry> { it.isDir }.thenByDescending { it.modified }
+        )
+    }
+
+    /** 看一眼文本文件；二进制和超大文件直接说明白，不硬塞 */
+    fun openWorkspaceFile(entry: WorkspaceEntry) {
+        if (entry.isDir) {
+            _notice.value = "暂不支持子目录：${entry.name}"
+            return
+        }
+        val f = File(entry.path)
+        if (f.length() > 512 * 1024) {
+            _notice.value = "文件太大（${readableSize(f.length())}），去终端里看"
+            return
+        }
+        viewModelScope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching { f.readText() }.getOrElse { "（读不了：${it.message}）" }
+            }
+            val binary = text.contains('\u0000')
+            _workspacePreview.value = entry.name to
+                if (binary) "（二进制文件，没法直接预览）" else text
+        }
+    }
+
+    fun closeWorkspacePreview() {
+        _workspacePreview.value = null
+    }
+
+    fun deleteWorkspaceFile(entry: WorkspaceEntry) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { File(entry.path).delete() }.getOrDefault(false)
+            }
+            _notice.value = if (ok) "已删除 ${entry.name}" else "删除失败：${entry.name}"
+            refreshWorkspace()
+        }
+    }
+
+    // ---------- 更新检查 ----------
+
+    fun appVersionName(): String = runCatching {
+        val app = getApplication<Application>()
+        app.packageManager.getPackageInfo(app.packageName, 0).versionName
+    }.getOrNull() ?: "1.4.0"
+
+    fun checkUpdate() {
+        if (_update.value is UpdateState.Checking) return
+        _update.value = UpdateState.Checking
+        viewModelScope.launch {
+            val r = UpdateChecker.check(appVersionName())
+            _update.value = r.fold(
+                onSuccess = { UpdateState.Done(it) },
+                onFailure = { UpdateState.Error(it.message ?: "检查更新失败") }
+            )
+        }
+    }
+
+    fun dismissUpdate() {
+        _update.value = UpdateState.Idle
+    }
+}
+
+/** 人类看得懂的大小 */
+fun readableSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
+    else -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
 }

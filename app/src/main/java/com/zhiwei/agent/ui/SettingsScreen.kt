@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -61,6 +62,10 @@ import com.zhiwei.agent.data.DEFAULT_SYSTEM_PROMPT
 import com.zhiwei.agent.data.THEME_DARK
 import com.zhiwei.agent.data.THEME_LIGHT
 import com.zhiwei.agent.data.THEME_SYSTEM
+import com.zhiwei.agent.net.RELEASES_URL
+import com.zhiwei.agent.net.UpdateChecker
+import com.zhiwei.agent.net.UpdateState
+import com.zhiwei.agent.readableSize
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +76,8 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
     val usage by vm.usage.collectAsState()
     val keyTests by vm.keyTests.collectAsState()
     val keyTesting by vm.keyTesting.collectAsState()
+    val update by vm.update.collectAsState()
+    val uriHandler = LocalUriHandler.current
 
     val context = LocalContext.current
     val notifyPermission = rememberLauncherForActivityResult(
@@ -84,6 +91,7 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
     var confirmClearConvs by remember { mutableStateOf(false) }
     var confirmClearMessages by remember { mutableStateOf(false) }
     var confirmResetStats by remember { mutableStateOf(false) }
+    var showNotes by remember { mutableStateOf(false) }
 
     val prompts by vm.prompts.collectAsState()
     var promptEditorOpen by remember { mutableStateOf(false) }
@@ -94,7 +102,7 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.3.0"
+        }.getOrNull() ?: "1.4.0"
     }
     val poolKeys = settings.usableKeys()
 
@@ -198,7 +206,7 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                     }
                     SwitchRow(
                         title = "自动轮换",
-                        subtitle = "每次请求按顺序挑下一个 Key，失败不重试",
+                        subtitle = "每次请求按顺序挑下一个 Key；出错时自动换 Key 重试",
                         checked = settings.keyRotation,
                         onChange = { v -> vm.updateSettings { it.copy(keyRotation = v) } }
                     )
@@ -293,6 +301,25 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                         value = settings.contextLimit,
                         range = 4..80,
                         onChange = { v -> vm.updateSettings { it.copy(contextLimit = v) } }
+                    )
+                    Divider()
+                    StepperRow(
+                        title = "服务商报错重试次数",
+                        value = settings.retryCount,
+                        range = 0..10,
+                        onChange = { v -> vm.updateSettings { it.copy(retryCount = v) } }
+                    )
+                    Text(
+                        text = "超时、限流、5xx、断连都会自动重试，间隔逐步拉长（最多等 6 秒）；密钥池里不止一个 Key 时，重试必定换一个。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Divider()
+                    SwitchRow(
+                        title = "出错后自动继续",
+                        subtitle = "重试用完仍失败时自己补一轮「继续」，不把任务掐断",
+                        checked = settings.autoResumeAfterFailure,
+                        onChange = { v -> vm.updateSettings { it.copy(autoResumeAfterFailure = v) } }
                     )
                     OutlinedTextField(
                         value = settings.tavilyApiKey,
@@ -614,9 +641,9 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                 }
             }
 
-            // ---------------- 关于 ----------------
+            // ---------------- 关于我们 ----------------
             item {
-                SectionCard("关于") {
+                SectionCard("关于我们") {
                     Text("知微智能体 v$versionName", style = MaterialTheme.typography.bodyLarge)
                     Text(
                         text = "手机端 AI 智能体：OpenAI 兼容接口 + 密钥池 + 工具调用 + 终端 + 记忆/知识库。" +
@@ -628,6 +655,86 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                         text = "github.com/mingxiozsg-star/zhiwei-agent",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
+                    )
+                    Divider()
+                    when (val u = update) {
+                        is UpdateState.Idle -> {
+                            TextButton(onClick = { vm.checkUpdate() }) { Text("检查更新") }
+                        }
+
+                        is UpdateState.Checking -> {
+                            Text(
+                                text = "正在检查更新…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        is UpdateState.Error -> {
+                            Text(
+                                text = "检查失败：${u.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { vm.checkUpdate() }) { Text("重试") }
+                                TextButton(onClick = { uriHandler.openUri(RELEASES_URL) }) {
+                                    Text("打开发布页")
+                                }
+                            }
+                        }
+
+                        is UpdateState.Done -> {
+                            val info = u.info
+                            if (UpdateChecker.isNewer(versionName, info.tag)) {
+                                Text(
+                                    text = "发现新版本 ${info.tag}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                if (info.apkSize > 0) {
+                                    Text(
+                                        text = "安装包 ${readableSize(info.apkSize)}" +
+                                            if (info.publishedAt.isBlank()) "" else " · ${info.publishedAt}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(onClick = { uriHandler.openUri(info.mirrorUrl) }) {
+                                        Text("下载更新（镜像）")
+                                    }
+                                    TextButton(onClick = { uriHandler.openUri(info.pageUrl) }) {
+                                        Text("原站")
+                                    }
+                                }
+                                if (info.notes.isNotBlank()) {
+                                    CollapseHeader(
+                                        text = if (showNotes) "收起更新说明" else "展开更新说明",
+                                        onClick = { showNotes = !showNotes }
+                                    )
+                                    if (showNotes) {
+                                        Text(
+                                            text = info.notes,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    text = "已是最新版本（${info.tag}）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TextButton(onClick = { vm.checkUpdate() }) { Text("再检查一次") }
+                            }
+                        }
+                    }
+                    Text(
+                        text = "更新只在这儿检查并跳转下载，不会自己装。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

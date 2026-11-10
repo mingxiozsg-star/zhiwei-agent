@@ -1,6 +1,7 @@
 package com.zhiwei.agent.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,8 +23,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -84,6 +87,7 @@ fun ChatScreen(
     val memories by vm.memories.collectAsState()
     val knowledge by vm.knowledge.collectAsState()
     val prompts by vm.prompts.collectAsState()
+    val netStatus by vm.netStatus.collectAsState()
 
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -239,13 +243,78 @@ fun ChatScreen(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 2.dp
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 两个入口：AI 电脑（终端/沙箱）与工作区（智能体的文件目录）。
+                    // 这两个功能只在输入栏保留一处入口，抽屉里不再重复放。
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 10.dp, end = 10.dp, top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AgentEntry(
+                            icon = Icons.Default.Build,
+                            label = "AI 电脑",
+                            onClick = { onNavigate(AppScreen.TERMINAL) }
+                        )
+                        AgentEntry(
+                            icon = Icons.AutoMirrored.Filled.List,
+                            label = "工作区",
+                            onClick = { onNavigate(AppScreen.WORKSPACE) }
+                        )
+                        Spacer(Modifier.weight(1f))
+                        if (messages.isNotEmpty()) {
+                            Text(
+                                text = "${messages.size} 条",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // 重试进度：服务商报错时会显示「第 2/6 次重试」
+                    val status = netStatus
+                    if (!status.isNullOrBlank()) {
+                        Text(
+                            text = status,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(start = 12.dp, top = 6.dp)
+                        )
+                    }
+
+                    // 上一次失败/中途停下：给一个直接的「继续」，不用自己打两个字
+                    val lastMsg = messages.lastOrNull()
+                    if (!busy && lastMsg != null && lastMsg.role == ROLE_ASSISTANT && lastMsg.isError) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp, end = 12.dp, top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "这一轮没做完",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { vm.continueRun() }) { Text("继续") }
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { vm.regenerate() }) { Text("重答") }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     Box {
                         IconButton(
                             onClick = { plusOpen = true },
@@ -353,6 +422,7 @@ fun ChatScreen(
                             contentDescription = if (busy) "停止" else "发送"
                         )
                     }
+                    }
                 }
             }
         }
@@ -380,5 +450,36 @@ fun ChatScreen(
                 TextButton(onClick = { renameOpen = false }) { Text("取消") }
             }
         )
+    }
+}
+
+/**
+ * 输入栏上的入口按钮：图标 + 文字，一眼能看清点进去是什么。
+ * 「AI 电脑」= 终端沙箱，「工作区」= 智能体的文件目录。
+ */
+@Composable
+private fun AgentEntry(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(text = label, style = MaterialTheme.typography.labelMedium)
+        }
     }
 }

@@ -1,39 +1,42 @@
-## 知微智能体 v1.3.0
+## 知微智能体 v1.4.0
 
-这一版加了两块新东西——**设备操控**和**提示词库**，顺手把工具调用和界面收拾了一遍。
+这一版主要干两件事：把「额度扣了、界面一个字没有」修掉，再把工作区、内置更新和输入栏入口补上。
 
-**设备操控：说话就能用**
+**「有消耗、没输出」修好了**
 
-设置里打开「允许设备操控」，下面这些直接对知微说就行，不用记命令：
+以前有三种情况会让你花了钱却什么都看不到，现在都不会了：
 
-- 「声音小一点」→ 直接改音量，还会把现在的音量报给你
-- 「手电筒打开」→ 开关闪光灯
-- 「屏幕亮一点」→ 调屏幕亮度（第一次用会引导你去开「修改系统设置」权限）
-- 「打开微信」→ 按应用名找并启动，找不到包名就按名字模糊匹配
-- 「震动一下」→ 短震动
-- 「念一下」→ 把回复朗读出来
-- 「把这段复制到剪贴板」「跳到 WiFi 设置」→ 剪贴板与系统设置页
-- 「手机上装了哪些应用」→ 列出可启动的应用，也可以按名字筛
+- 网关不认流式请求，直接回一整段 JSON —— 以前只按流式逐行读，等于什么都没读到；现在两种格式都认
+- 模型只把思考写进 reasoning 字段，不返回正文 —— 现在把思考内容显示出来并标注「模型没有返回正文」
+- 上游真的返回空内容 —— 不再留一个空气泡，直接说清是空内容，并且算作可以重试
 
-没装、没权限、没手电筒硬件，都会直接说清是哪一种，不糊弄。
+**报错不再把任务掐断**
 
-**提示词库：常用问法点一下就填**
+- 超时、限流、5xx、断连都会自动重试，默认 6 次（设置里可调 0~10），间隔逐步拉长，最多等 6 秒
+- 密钥池里不止一个 Key 时，重试必定换一个 Key
+- 重试用完仍然失败，会自动补一轮「继续」接着做，而不是停在那儿等你催
+- 重试进度就显示在输入栏上方：第 2/6 次重试：请求过于频繁或额度用尽
 
-聊天页输入栏左边的 ＋ 现在就是提示词库，点一条直接填进输入框。第一版自带 5 条：总结要点、翻译成中文、润色、写代码、列计划。设置 → 提示词库里能自己增删改，存在本机。提示词里可以写 `{time}` 和 `{model}`，填入时自动替换成当前时间和当前模型名。
+**输入栏多了两个入口：AI 电脑 / 工作区**
 
-**工具调用：预算代替次数上限，一个算式一次算完**
+你：在工作区里建个 sort.py，写个冒泡排序
+知微：写好并跑了一遍 → 你切到「工作区」就能看到 sort.py，点开看内容，长按删掉。
 
-- 时间、计算、设备信息、记忆检索这类本地只读工具不占预算；只有真动设备的（音量、亮度、开应用、上网抓取等）才计费。默认预算从 4 提到 12。
-- 预算用完了不会把对话掐断，会直接告诉你：回一句「继续」就接着做，或者去设置里把预算调大。
-- 计算器支持一次传多个表达式，批处理比一个一个算快得多。
-- 同一次提问里，同样的工具、同样的参数只真跑一遍，模型再要就复用上次结果。
-- 执行失败的工具会在卡片上标「【执行失败】」，不用点开才知道。
+- 「AI 电脑」就是终端沙箱，「工作区」是智能体的 home 目录，跟终端是同一个目录
+- 这两个入口只放在输入栏一处，折叠栏里不再重复放
 
-**界面收拾干净了**
+**设置按用途分成十类，最底下是「关于我们」**
 
-折叠栏的功能入口从两排方块图标改成一列（图标在左、文字在右），不再挤成一团；记忆库、知识库、工具与插件已经在折叠栏里，就从顶栏菜单和输入栏 ＋ 里删掉了，重复的入口只留一处。
+接口 / API 密钥池 / 智能体 / 提示词库 / 记忆与知识 / 生成参数 / 外观 / 显示与行为 / 用量统计 / 数据，最底下是「关于我们」。
+
+「关于我们」里可以直接检查更新：有新版本就显示版本号、更新说明、安装包大小，一键跳转下载（镜像或原站）。只检查不自己装。
+
+**系统提示词升级到 v2**
+
+先给结论、能自己查的就自己查、多步任务先列 2~5 步计划再逐步做完、工具报错不等于任务结束、不编造事实和链接、删除支付这类不可逆操作先说明。自己改过提示词的不会被动，只有从没改过的才会自动换成新版。
 
 **下载**
+
 - Releases：https://github.com/mingxiozsg-star/zhiwei-agent/releases
 - 加速镜像：https://ghfast.top/https://github.com/mingxiozsg-star/zhiwei-agent/releases
 
@@ -41,42 +44,45 @@
 
 ---
 
-## Zhiwei Agent v1.3.0
+## Zhiwei Agent v1.4.0
 
-Two new things this release — **device control** and a **prompt library** — plus a pass over tool calls and the UI.
+Two things this release: the "tokens burned, nothing on screen" bug is gone, and Workspace, built-in update check and the input-bar entries are in.
 
-**Device control: just say it**
+**"Tokens burned, nothing printed" is fixed**
 
-Turn on "Allow device control" in Settings and the following work by voice or text, no commands to memorise:
+Three cases used to cost you money and show you nothing. None of them do now:
 
-- "Volume down a bit" → changes volume and tells you the new level
-- "Turn on the torch" → toggles the flash
-- "Screen brighter" → adjusts brightness (first time it walks you to the "modify system settings" permission)
-- "Open WeChat" → launches by app name, falling back to a fuzzy name match
-- "Buzz once" → a short vibration
-- "Read it out" → speaks the reply
-- "Copy this to the clipboard", "Jump to Wi-Fi settings"
-- "What apps are installed?" → lists launchable apps, filterable by name
+- The gateway ignores the streaming request and returns one plain JSON blob — the old code only read line-by-line SSE, so it saw nothing. Both formats are handled now.
+- The model writes only into `reasoning` and returns no content — its thinking is shown and labelled "the model returned no content".
+- Upstream genuinely returns nothing — no more blank bubble; it says so plainly, and counts as retryable.
 
-Missing app, missing permission, no flash hardware — each case says which one it is instead of hand-waving.
+**Errors no longer kill the task**
 
-**Prompt library: tap to fill**
+- Timeouts, rate limits, 5xx and dropped connections retry automatically — 6 times by default (0–10 in Settings), backing off up to 6 seconds
+- With more than one key in the pool, every retry switches to a different key
+- If retries run out, the agent adds its own "continue" instead of stopping and waiting for you
+- Progress shows above the input bar: "retry 2/6: too many requests or quota exhausted"
 
-The ＋ on the left of the chat input is now your prompt library — tap one and it drops into the input box. Five are seeded: summarise, translate to Chinese, polish, write code, make a plan. Add, edit and delete them under Settings → Prompt library; everything stays on device. Use `{time}` and `{model}` inside a prompt and they get filled in with the current time and model name.
+**Two entries on the input bar: AI computer / Workspace**
 
-**Tool calls: a budget instead of a round cap, and one shot per sum**
+You: create sort.py in the workspace with a bubble sort
+Agent: written and run → switch to Workspace and sort.py is there; tap to read it, long-press to delete it.
 
-- Local read-only tools (time, calculator, device info, memory search) are free. Only tools that actually touch the device (volume, brightness, launching apps, fetching pages) count. The default budget goes from 4 to 12.
-- Running out of budget no longer cuts the conversation off. It tells you: reply "continue" and it keeps going, or raise the budget in Settings.
-- The calculator takes several expressions in one call — batch beats one at a time.
-- Within one question, an identical call with identical arguments runs once; repeats reuse the previous result.
-- Failed tools are marked "【执行失败】" on the card, no need to expand to find out.
+- **AI computer** is the terminal sandbox; **Workspace** is the agent's home directory — the same directory the terminal uses
+- Both live only on the input bar; the drawer no longer duplicates them
 
-**Cleaner UI**
+**Settings grouped into ten sections, with About us at the bottom**
 
-The drawer's feature entries went from two rows of square icons to a single column (icon left, label right) instead of a pile. Memory, knowledge and plugins already live in the drawer, so their entries were removed from the top-bar menu and the input ＋. Each entry now appears in one place only.
+Endpoint / API key pool / Agent / Prompt library / Memory & knowledge / Generation / Appearance / Display & behaviour / Usage stats / Data — with About us at the bottom.
+
+About us checks for updates right there: a new version shows its tag, notes and APK size, with one-tap jumps to the download (mirror or original). It checks and links, never installs by itself.
+
+**System prompt upgraded to v2**
+
+Lead with the conclusion; look things up yourself where you can; for multi-step jobs list a 2–5 step plan and work through it; a tool error is not the end of the task; never invent facts or links; explain before irreversible actions like deletes and payments. If you edited your prompt, nothing changes — only untouched ones migrate.
 
 **Download**
+
 - Releases: https://github.com/mingxiozsg-star/zhiwei-agent/releases
 - Mirror: https://ghfast.top/https://github.com/mingxiozsg-star/zhiwei-agent/releases
 
