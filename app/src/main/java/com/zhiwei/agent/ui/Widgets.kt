@@ -440,9 +440,9 @@ fun TypingDots() {
     }
 }
 
-/** 空会话提示 */
+/** 空会话提示：优先显示角色卡里的开场白 */
 @Composable
-fun EmptyChatHint(onSuggestion: (String) -> Unit) {
+fun EmptyChatHint(greeting: String? = null, onSuggestion: (String) -> Unit) {
     val samples = listOf(
         "现在几点了？",
         "帮我算一下 (128+72)*3/8",
@@ -462,7 +462,8 @@ fun EmptyChatHint(onSuggestion: (String) -> Unit) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "先在设置里填好接口地址与 API Key，就能开始聊了。",
+            text = greeting?.trim().takeUnless { it.isNullOrEmpty() }
+                ?: "先在设置里填好接口地址与 API Key，就能开始聊了。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

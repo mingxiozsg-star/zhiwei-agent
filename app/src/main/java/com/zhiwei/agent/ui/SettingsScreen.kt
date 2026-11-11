@@ -1,11 +1,9 @@
 package com.zhiwei.agent.ui
 
-import android.Manifest
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,19 +11,36 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,70 +57,100 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.zhiwei.agent.ChatViewModel
-import com.zhiwei.agent.data.COLLAPSE_MULTI
-import com.zhiwei.agent.data.COLLAPSE_NONE
-import com.zhiwei.agent.data.COLLAPSE_SINGLE
-import com.zhiwei.agent.data.DEFAULT_SYSTEM_PROMPT
-import com.zhiwei.agent.data.THEME_DARK
-import com.zhiwei.agent.data.THEME_LIGHT
-import com.zhiwei.agent.data.THEME_SYSTEM
-import com.zhiwei.agent.net.RELEASES_URL
-import com.zhiwei.agent.net.UpdateChecker
-import com.zhiwei.agent.net.UpdateState
-import com.zhiwei.agent.readableSize
+import com.zhiwei.agent.AppScreen
+
+/**
+ * 设置页的十三个分类。顺序固定，不跟着功能改动乱动；
+ * 首页只放「标题 + 图标 + 一行小字简介」，具体开关都收进二级页。
+ */
+enum class SettingsGroup(
+    val title: String,
+    val icon: ImageVector,
+    val desc: String
+) {
+    MODEL("模型与 API", Icons.Default.Settings, "主模型选择、API 网关与备用线路、额度消耗、流式输出"),
+    PERSONA("智能体人设", Icons.Default.Edit, "系统提示词编辑、人设模板导入导出、角色记忆与上下文"),
+    SKILLS("技能 Skills", Icons.Default.Star, "SKILL.md 技能包：浏览仓库、安装、启用禁用与删除"),
+    TOOLS("工具与权限", Icons.Default.Build, "内置工具总开关、提权通道、高危命令拦截、权限管控"),
+    STATS("使用统计", Icons.Default.DateRange, "消息热力图、今日消耗与累计额度、调用日志明细"),
+    THEME("主题与字体", Icons.Default.Face, "预设主题、深色 / AMOLED、液态玻璃外观、字体字号"),
+    CHAT("对话管理", Icons.AutoMirrored.Filled.List, "历史保存与导出、批量清空、消息编辑重发、气泡样式"),
+    WORKSPACE("工作区管理", Icons.Default.Home, "工作区新建切换、文件联动、版本快照与变更对比"),
+    LINK("联动扩展", Icons.Default.Share, "知微浏览器联动、读取本地目录、跨应用唤起"),
+    NET("网络与安全", Icons.Default.Lock, "代理设置、SSL 校验、自动切换线路、请求超时"),
+    NOTIFY("通知", Icons.Default.Notifications, "消息推送、后台通知、报错提醒、版本更新提醒"),
+    GESTURE("快捷键与手势", Icons.Default.MoreVert, "侧边手势、长按菜单、快捷指令"),
+    ABOUT("关于与赞助", Icons.Default.Info, "版本信息、更新检测、反馈入口、开源仓库、交流群、隐私政策")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
-    val settings by vm.settings.collectAsState()
-    val models by vm.models.collectAsState()
-    val modelsLoading by vm.modelsLoading.collectAsState()
-    val usage by vm.usage.collectAsState()
-    val keyTests by vm.keyTests.collectAsState()
-    val keyTesting by vm.keyTesting.collectAsState()
-    val update by vm.update.collectAsState()
-    val uriHandler = LocalUriHandler.current
+fun SettingsScreen(
+    vm: ChatViewModel,
+    onOpenDrawer: () -> Unit = {},
+    onNavigate: (AppScreen) -> Unit = {}
+) {
+    var groupName by rememberSaveable { mutableStateOf<String?>(null) }
+    val group = groupName?.let { n -> SettingsGroup.entries.firstOrNull { it.name == n } }
 
-    val context = LocalContext.current
-    val notifyPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { }
-    var showKey by remember { mutableStateOf(false) }
-    var showPool by remember { mutableStateOf(false) }
-    var tokensText by remember { mutableStateOf(if (settings.maxTokens > 0) settings.maxTokens.toString() else "") }
-    var promptOpen by remember { mutableStateOf(false) }
-    var paramOpen by remember { mutableStateOf(false) }
-    var confirmClearConvs by remember { mutableStateOf(false) }
-    var confirmClearMessages by remember { mutableStateOf(false) }
-    var confirmResetStats by remember { mutableStateOf(false) }
-    var showNotes by remember { mutableStateOf(false) }
+    // 二级页里按返回先回分类列表，而不是直接退出设置
+    BackHandler(enabled = group != null) { groupName = null }
 
-    val prompts by vm.prompts.collectAsState()
-    var promptEditorOpen by remember { mutableStateOf(false) }
-    var promptEditId by remember { mutableStateOf<String?>(null) }
-    var promptTitle by remember { mutableStateOf("") }
-    var promptBody by remember { mutableStateOf("") }
-
-    val versionName = remember {
-        runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.4.0"
+    val current = group
+    if (current == null) {
+        SettingsHome(onOpenDrawer = onOpenDrawer, onOpen = { groupName = it.name })
+        return
     }
-    val poolKeys = settings.usableKeys()
 
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(current.title, style = MaterialTheme.typography.titleMedium)
+                },
+                navigationIcon = {
+                    IconButton(onClick = { groupName = null }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回设置")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            when (current) {
+                SettingsGroup.MODEL -> ModelSettingsPage(vm)
+                SettingsGroup.PERSONA -> PersonaSettingsPage(vm, onNavigate)
+                SettingsGroup.SKILLS -> SkillsSettingsPage(vm, onNavigate)
+                SettingsGroup.TOOLS -> ToolsSettingsPage(vm)
+                SettingsGroup.STATS -> StatsSettingsPage(vm)
+                SettingsGroup.THEME -> ThemeSettingsPage(vm)
+                SettingsGroup.CHAT -> ChatSettingsPage(vm)
+                SettingsGroup.WORKSPACE -> WorkspaceSettingsPage(vm, onNavigate)
+                SettingsGroup.LINK -> LinkSettingsPage(vm)
+                SettingsGroup.NET -> NetSettingsPage(vm)
+                SettingsGroup.NOTIFY -> NotifySettingsPage(vm)
+                SettingsGroup.GESTURE -> GestureSettingsPage(vm)
+                SettingsGroup.ABOUT -> AboutSettingsPage(vm)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsHome(onOpenDrawer: () -> Unit, onOpen: (SettingsGroup) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -122,745 +167,99 @@ fun SettingsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
         ) {
-            // ---------------- 接口 ----------------
-            item {
-                SectionCard("接口") {
-                    OutlinedTextField(
-                        value = settings.baseUrl,
-                        onValueChange = { v -> vm.updateSettings { it.copy(baseUrl = v) } },
-                        label = { Text("API 地址") },
-                        placeholder = { Text("https://api.openai.com/v1") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = settings.apiKey,
-                        onValueChange = { v -> vm.updateSettings { it.copy(apiKey = v) } },
-                        label = { Text("API Key") },
-                        singleLine = true,
-                        visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            TextButton(onClick = { showKey = !showKey }) {
-                                Text(if (showKey) "隐藏" else "显示")
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = settings.model,
-                            onValueChange = { v -> vm.updateSettings { it.copy(model = v) } },
-                            label = { Text("模型") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = { vm.refreshModels() }, enabled = !modelsLoading) {
-                            Text(if (modelsLoading) "获取中" else "获取列表")
-                        }
-                    }
-                    if (models.isNotEmpty()) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(models.take(60)) { m ->
-                                AssistChip(
-                                    onClick = { vm.updateSettings { it.copy(model = m) } },
-                                    label = { Text(m, fontSize = 11.sp) }
-                                )
-                            }
-                        }
-                    }
-                }
+            items(SettingsGroup.entries) { g ->
+                SetGroupRow(group = g, onClick = { onOpen(g) })
             }
-
-            // ---------------- 密钥池 ----------------
             item {
-                SectionCard("API 密钥池") {
-                    Text(
-                        text = "一行一个 Key，支持 # 开头写注释。池子非空时优先用池子里的，单个 Key 自动忽略。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = settings.apiKeysRaw,
-                        onValueChange = { v -> vm.updateSettings { it.copy(apiKeysRaw = v) } },
-                        label = { Text("密钥列表") },
-                        placeholder = { Text("sk-aaaa…\nsk-bbbb…\n# 备用\nsk-cccc…") },
-                        visualTransformation = if (showPool) VisualTransformation.None else PasswordVisualTransformation(),
-                        minLines = 3,
-                        maxLines = 8,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { showPool = !showPool }) {
-                            Text(if (showPool) "隐藏内容" else "显示内容")
-                        }
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = "共 ${poolKeys.size} 个",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    SwitchRow(
-                        title = "自动轮换",
-                        subtitle = "每次请求按顺序挑下一个 Key；出错时自动换 Key 重试",
-                        checked = settings.keyRotation,
-                        onChange = { v -> vm.updateSettings { it.copy(keyRotation = v) } }
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { vm.testKeys() }, enabled = !keyTesting) {
-                            Text(if (keyTesting) "测试中…" else "测试全部")
-                        }
-                        TextButton(onClick = { vm.clearKeyTests() }, enabled = keyTests.isNotEmpty() && !keyTesting) {
-                            Text("清除结果")
-                        }
-                    }
-                    keyTests.forEach { (k, r) ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = maskKey(k),
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1
-                            )
-                            Text(
-                                text = r,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (r == "可用") {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.error
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = "所有设置改完立刻生效，不用点保存；数据只留在这台手机上。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 18.dp)
+                )
             }
-
-            // ---------------- 智能体 ----------------
-            item {
-                SectionCard("智能体") {
-                    SwitchRow(
-                        title = "流式输出",
-                        subtitle = "边生成边显示",
-                        checked = settings.streamOutput,
-                        onChange = { v -> vm.updateSettings { it.copy(streamOutput = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "启用内置工具",
-                        subtitle = "时间、计算、设备、网页、记忆、知识库",
-                        checked = settings.enableTools,
-                        onChange = { v -> vm.updateSettings { it.copy(enableTools = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "原生工具调用",
-                        subtitle = "下发 tools 参数；个别网关不支持时关掉",
-                        checked = settings.nativeToolCall,
-                        onChange = { v -> vm.updateSettings { it.copy(nativeToolCall = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "允许 AI 执行终端命令",
-                        subtitle = "在应用沙箱内运行 shell，风险项",
-                        checked = settings.enableShellTool,
-                        onChange = { v -> vm.updateSettings { it.copy(enableShellTool = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "允许设备操控",
-                        subtitle = "音量、亮度、手电筒、震动、开应用、朗读",
-                        checked = settings.enableDeviceTools,
-                        onChange = { v -> vm.updateSettings { it.copy(enableDeviceTools = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "启用自定义插件",
-                        subtitle = "让模型调用你导入的工具",
-                        checked = settings.enablePlugins,
-                        onChange = { v -> vm.updateSettings { it.copy(enablePlugins = v) } }
-                    )
-                    StepperRow(
-                        title = "每回合工具预算",
-                        value = settings.toolMaxRounds,
-                        range = 2..40,
-                        onChange = { v -> vm.updateSettings { it.copy(toolMaxRounds = v) } }
-                    )
-                    Text(
-                        text = "时间、计算、设备信息等本地只读工具不占预算；用完了回一句「继续」即可接着做。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    StepperRow(
-                        title = "每次带上的历史消息",
-                        value = settings.contextLimit,
-                        range = 4..80,
-                        onChange = { v -> vm.updateSettings { it.copy(contextLimit = v) } }
-                    )
-                    Divider()
-                    StepperRow(
-                        title = "服务商报错重试次数",
-                        value = settings.retryCount,
-                        range = 0..10,
-                        onChange = { v -> vm.updateSettings { it.copy(retryCount = v) } }
-                    )
-                    Text(
-                        text = "超时、限流、5xx、断连都会自动重试，间隔逐步拉长（最多等 6 秒）；密钥池里不止一个 Key 时，重试必定换一个。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "出错后自动继续",
-                        subtitle = "重试用完仍失败时自己补一轮「继续」，不把任务掐断",
-                        checked = settings.autoResumeAfterFailure,
-                        onChange = { v -> vm.updateSettings { it.copy(autoResumeAfterFailure = v) } }
-                    )
-                    OutlinedTextField(
-                        value = settings.tavilyApiKey,
-                        onValueChange = { v -> vm.updateSettings { it.copy(tavilyApiKey = v) } },
-                        label = { Text("Tavily API Key（联网搜索，可留空）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Divider()
-                    CollapseHeader(
-                        text = if (promptOpen) "收起系统提示词" else "展开系统提示词",
-                        onClick = { promptOpen = !promptOpen }
-                    )
-                    if (promptOpen) {
-                        OutlinedTextField(
-                            value = settings.systemPrompt,
-                            onValueChange = { v -> vm.updateSettings { it.copy(systemPrompt = v) } },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 4,
-                            maxLines = 12,
-                            label = { Text("系统提示词") }
-                        )
-                        TextButton(onClick = {
-                            vm.updateSettings { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) }
-                        }) { Text("恢复默认提示词") }
-                    }
-                }
-            }
-
-            // ---------------- 提示词库 ----------------
-            item {
-                SectionCard("提示词库") {
-                    Text(
-                        text = "聊天页输入栏的 ＋ 里直接点选；常用问法存这儿，点一下填进输入框。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (prompts.isEmpty()) {
-                        Text(
-                            text = "还没有提示词。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    prompts.forEach { p ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = p.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = p.text.replace('\n', ' '),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
-                                )
-                            }
-                            TextButton(onClick = {
-                                promptEditId = p.id
-                                promptTitle = p.title
-                                promptBody = p.text
-                                promptEditorOpen = true
-                            }) { Text("编辑") }
-                            TextButton(onClick = { vm.deletePrompt(p.id) }) { Text("删除") }
-                        }
-                        Divider()
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = {
-                            promptEditId = null
-                            promptTitle = ""
-                            promptBody = ""
-                            promptEditorOpen = true
-                        }) { Text("新增提示词") }
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { vm.resetPrompts() }) { Text("清空全部") }
-                    }
-                }
-            }
-
-            // ---------------- 记忆与知识 ----------------
-            item {
-                SectionCard("记忆与知识") {
-                    SwitchRow(
-                        title = "自动记住对话",
-                        subtitle = "聊完自动把长期信息存进记忆库",
-                        checked = settings.autoMemory,
-                        onChange = { v -> vm.updateSettings { it.copy(autoMemory = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "回答时带上记忆与知识",
-                        subtitle = "把检索到的片段注入对话",
-                        checked = settings.injectContext,
-                        onChange = { v -> vm.updateSettings { it.copy(injectContext = v) } }
-                    )
-                    Divider()
-                    StepperRow(
-                        title = "每轮记忆条数",
-                        value = settings.memoryTopK,
-                        range = 0..10,
-                        onChange = { v -> vm.updateSettings { it.copy(memoryTopK = v) } }
-                    )
-                    Divider()
-                    StepperRow(
-                        title = "每轮知识片段数",
-                        value = settings.knowledgeTopK,
-                        range = 0..10,
-                        onChange = { v -> vm.updateSettings { it.copy(knowledgeTopK = v) } }
-                    )
-                    OutlinedTextField(
-                        value = settings.extractModel,
-                        onValueChange = { v -> vm.updateSettings { it.copy(extractModel = v) } },
-                        label = { Text("记忆抽取用模型（留空＝跟随主模型）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = settings.memoryExtractRules,
-                        onValueChange = { v -> vm.updateSettings { it.copy(memoryExtractRules = v) } },
-                        label = { Text("抽取附加规则（可选）") },
-                        placeholder = { Text("例如：别记日程类临时信息；家人都记全名") },
-                        minLines = 2,
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-
-            // ---------------- 生成参数 ----------------
-            item {
-                SectionCard("生成参数") {
-                    CollapseHeader(
-                        text = if (paramOpen) "收起参数" else "展开参数（温度、采样、惩罚、长度）",
-                        onClick = { paramOpen = !paramOpen }
-                    )
-                    if (paramOpen) {
-                        Divider()
-                        SliderRow(
-                            title = "温度",
-                            text = String.format("%.2f", settings.temperature),
-                            value = settings.temperature,
-                            range = 0f..2f,
-                            onChange = { v -> vm.updateSettings { it.copy(temperature = v) } }
-                        )
-                        SliderRow(
-                            title = "Top-P",
-                            text = String.format("%.2f", settings.topP),
-                            value = settings.topP,
-                            range = 0.1f..1f,
-                            onChange = { v -> vm.updateSettings { it.copy(topP = v) } }
-                        )
-                        SliderRow(
-                            title = "频率惩罚",
-                            text = String.format("%.2f", settings.frequencyPenalty),
-                            value = settings.frequencyPenalty,
-                            range = -2f..2f,
-                            onChange = { v -> vm.updateSettings { it.copy(frequencyPenalty = v) } }
-                        )
-                        SliderRow(
-                            title = "存在惩罚",
-                            text = String.format("%.2f", settings.presencePenalty),
-                            value = settings.presencePenalty,
-                            range = -2f..2f,
-                            onChange = { v -> vm.updateSettings { it.copy(presencePenalty = v) } }
-                        )
-                        OutlinedTextField(
-                            value = tokensText,
-                            onValueChange = { v ->
-                                tokensText = v.filter { it.isDigit() }.take(6)
-                                vm.updateSettings { it.copy(maxTokens = tokensText.toIntOrNull() ?: 0) }
-                            },
-                            label = { Text("最大回复 tokens（0 表示不限）") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-
-            // ---------------- 外观 ----------------
-            item {
-                SectionCard("外观") {
-                    ChipPicker(
-                        selected = settings.themeMode,
-                        options = listOf(
-                            THEME_SYSTEM to "跟随系统",
-                            THEME_LIGHT to "浅色",
-                            THEME_DARK to "深色"
-                        ),
-                        onSelect = { key -> vm.updateSettings { it.copy(themeMode = key) } }
-                    )
-                    SliderRow(
-                        title = "字号缩放",
-                        text = String.format("%.2f×", settings.fontScale),
-                        value = settings.fontScale,
-                        range = 0.8f..1.6f,
-                        onChange = { v -> vm.updateSettings { it.copy(fontScale = v) } }
-                    )
-                    SliderRow(
-                        title = "抽屉宽度",
-                        text = String.format("%.0f%%", settings.drawerRatio * 100),
-                        value = settings.drawerRatio,
-                        range = 0.3f..0.7f,
-                        onChange = { v -> vm.updateSettings { it.copy(drawerRatio = v) } }
-                    )
-                }
-            }
-
-            // ---------------- 显示与行为 ----------------
-            item {
-                SectionCard("显示与行为") {
-                    Text("工具调用折叠方式", style = MaterialTheme.typography.bodyMedium)
-                    ChipPicker(
-                        selected = settings.collapseMode,
-                        options = listOf(
-                            COLLAPSE_NONE to "全部展开",
-                            COLLAPSE_SINGLE to "只有一个时折叠",
-                            COLLAPSE_MULTI to "多个时折叠"
-                        ),
-                        onSelect = { key -> vm.updateSettings { it.copy(collapseMode = key) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "显示消息时间",
-                        subtitle = "每条消息下面标出时间",
-                        checked = settings.showTimestamp,
-                        onChange = { v -> vm.updateSettings { it.copy(showTimestamp = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "屏幕常亮",
-                        subtitle = "对话页不自动息屏",
-                        checked = settings.keepScreenOn,
-                        onChange = { v -> vm.updateSettings { it.copy(keepScreenOn = v) } }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "回复完成提醒",
-                        subtitle = "回答结束弹一条通知",
-                        checked = settings.notifyOnDone,
-                        onChange = { v ->
-                            vm.updateSettings { it.copy(notifyOnDone = v) }
-                            if (v && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                        }
-                    )
-                    Divider()
-                    SwitchRow(
-                        title = "发送震动反馈",
-                        subtitle = "按下发送时轻震一下",
-                        checked = settings.hapticOnSend,
-                        onChange = { v -> vm.updateSettings { it.copy(hapticOnSend = v) } }
-                    )
-                }
-            }
-
-            // ---------------- 用量统计 ----------------
-            item {
-                SectionCard("用量统计") {
-                    if (usage.isEmpty) {
-                        Text(
-                            text = "还没有记录。服务端返回 usage 后会自动累计，数据只在本机。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        val total = usage.total
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            StatCell("请求", total.requests.toString(), Modifier.weight(1f))
-                            StatCell("输入 tokens", total.promptTokens.toString(), Modifier.weight(1f))
-                            StatCell("输出 tokens", total.completionTokens.toString(), Modifier.weight(1f))
-                        }
-                        Divider()
-                        usage.models.entries
-                            .sortedByDescending { it.value.totalTokens }
-                            .forEach { (name, u) ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = name,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        text = "${u.requests} 次 · ${u.totalTokens} tokens",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        Divider()
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "最近：" + usage.lastModel.ifBlank { "—" },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(onClick = { confirmResetStats = true }) { Text("清零") }
-                        }
-                    }
-                }
-            }
-
-            // ---------------- 数据 ----------------
-            item {
-                SectionCard("数据") {
-                    TextButton(onClick = { confirmClearMessages = true }) {
-                        Text("清空当前会话消息")
-                    }
-                    TextButton(onClick = { confirmClearConvs = true }) {
-                        Text("删除全部会话")
-                    }
-                }
-            }
-
-            // ---------------- 关于我们 ----------------
-            item {
-                SectionCard("关于我们") {
-                    Text("知微智能体 v$versionName", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        text = "手机端 AI 智能体：OpenAI 兼容接口 + 密钥池 + 工具调用 + 终端 + 记忆/知识库。" +
-                            "对话、记忆、知识、用量全部只存在本机。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "github.com/mingxiozsg-star/zhiwei-agent",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Divider()
-                    when (val u = update) {
-                        is UpdateState.Idle -> {
-                            TextButton(onClick = { vm.checkUpdate() }) { Text("检查更新") }
-                        }
-
-                        is UpdateState.Checking -> {
-                            Text(
-                                text = "正在检查更新…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        is UpdateState.Error -> {
-                            Text(
-                                text = "检查失败：${u.message}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(onClick = { vm.checkUpdate() }) { Text("重试") }
-                                TextButton(onClick = { uriHandler.openUri(RELEASES_URL) }) {
-                                    Text("打开发布页")
-                                }
-                            }
-                        }
-
-                        is UpdateState.Done -> {
-                            val info = u.info
-                            if (UpdateChecker.isNewer(versionName, info.tag)) {
-                                Text(
-                                    text = "发现新版本 ${info.tag}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                if (info.apkSize > 0) {
-                                    Text(
-                                        text = "安装包 ${readableSize(info.apkSize)}" +
-                                            if (info.publishedAt.isBlank()) "" else " · ${info.publishedAt}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(onClick = { uriHandler.openUri(info.mirrorUrl) }) {
-                                        Text("下载更新（镜像）")
-                                    }
-                                    TextButton(onClick = { uriHandler.openUri(info.pageUrl) }) {
-                                        Text("原站")
-                                    }
-                                }
-                                if (info.notes.isNotBlank()) {
-                                    CollapseHeader(
-                                        text = if (showNotes) "收起更新说明" else "展开更新说明",
-                                        onClick = { showNotes = !showNotes }
-                                    )
-                                    if (showNotes) {
-                                        Text(
-                                            text = info.notes,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            } else {
-                                Text(
-                                    text = "已是最新版本（${info.tag}）",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                TextButton(onClick = { vm.checkUpdate() }) { Text("再检查一次") }
-                            }
-                        }
-                    }
-                    Text(
-                        text = "更新只在这儿检查并跳转下载，不会自己装。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            item { Spacer(Modifier.padding(bottom = 24.dp)) }
         }
-    }
-
-    if (promptEditorOpen) {
-        AlertDialog(
-            onDismissRequest = { promptEditorOpen = false },
-            title = { Text(if (promptEditId == null) "新增提示词" else "编辑提示词") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = promptTitle,
-                        onValueChange = { promptTitle = it },
-                        label = { Text("名称") },
-                        placeholder = { Text("例如：总结要点") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = promptBody,
-                        onValueChange = { promptBody = it },
-                        label = { Text("内容") },
-                        placeholder = { Text("例如：把下面这段总结成三条要点：") },
-                        minLines = 3,
-                        maxLines = 8,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = promptBody.isNotBlank(),
-                    onClick = {
-                        val id = promptEditId
-                        if (id == null) {
-                            vm.addPrompt(promptTitle, promptBody)
-                        } else {
-                            vm.updatePrompt(id, promptTitle, promptBody)
-                        }
-                        promptEditorOpen = false
-                    }
-                ) { Text("保存") }
-            },
-            dismissButton = {
-                TextButton(onClick = { promptEditorOpen = false }) { Text("取消") }
-            }
-        )
-    }
-
-    if (confirmClearConvs) {
-        AlertDialog(
-            onDismissRequest = { confirmClearConvs = false },
-            title = { Text("删除全部会话？") },
-            text = { Text("所有本地对话记录都会被清掉，无法恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.clearAllConversations()
-                    confirmClearConvs = false
-                }) { Text("删除") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearConvs = false }) { Text("取消") }
-            }
-        )
-    }
-
-    if (confirmClearMessages) {
-        AlertDialog(
-            onDismissRequest = { confirmClearMessages = false },
-            title = { Text("清空当前会话？") },
-            text = { Text("当前会话里的消息会被清空。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.clearMessages()
-                    confirmClearMessages = false
-                }) { Text("清空") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearMessages = false }) { Text("取消") }
-            }
-        )
-    }
-
-    if (confirmResetStats) {
-        AlertDialog(
-            onDismissRequest = { confirmResetStats = false },
-            title = { Text("清零用量统计？") },
-            text = { Text("只是本机的计数，不影响任何服务端账单。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.resetStats()
-                    confirmResetStats = false
-                }) { Text("清零") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmResetStats = false }) { Text("取消") }
-            }
-        )
     }
 }
 
-/** 掩码显示一个 Key，避免截图泄漏 */
-private fun maskKey(k: String): String =
-    if (k.length <= 10) k.take(4) + "…" else k.take(6) + "…" + k.takeLast(4)
+/** 分类行：标题 + 图标一行，下面一行小字概括，右侧箭头；点进去才是具体开关 */
+@Composable
+fun SetGroupRow(group: SettingsGroup, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = group.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.width(7.dp))
+                Icon(
+                    imageVector = group.icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = group.desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.outline
+        )
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+// ---------------- 二级页里共用的控件 ----------------
+
+/** 二级页外壳：整页可滚动，统一左右留白 */
+@Composable
+fun SetPage(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        content()
+        Spacer(Modifier.height(28.dp))
+    }
+}
 
 @Composable
-private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+fun SetSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
         )
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-            shape = RoundedCornerShape(16.dp),
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            ),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 content = content
             )
         }
@@ -868,118 +267,286 @@ private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Un
 }
 
 @Composable
-private fun Divider() {
+fun SetDivider() {
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
-private fun CollapseHeader(text: String, onClick: () -> Unit) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier
-            .fillMaxWidth()
-            .pointerInput(text) { detectTapGestures(onTap = { onClick() }) }
-    )
-}
-
-@Composable
-private fun StatCell(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier = modifier) {
-        Text(value, style = MaterialTheme.typography.titleMedium)
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun SwitchRow(
+fun SetSwitch(
     title: String,
-    subtitle: String,
+    subtitle: String? = null,
     checked: Boolean,
     onChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(10.dp))
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
 @Composable
-private fun StepperRow(
+fun SetStepper(
     title: String,
+    subtitle: String? = null,
     value: Int,
-    range: IntRange,
+    min: Int,
+    max: Int,
+    step: Int = 1,
+    suffix: String = "",
     onChange: (Int) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        TextButton(onClick = { if (value > range.first) onChange(value - 1) }) { Text("－") }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        TextButton(onClick = { onChange((value - step).coerceIn(min, max)) }, enabled = value > min) {
+            Text("−", style = MaterialTheme.typography.titleMedium)
+        }
         Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.width(38.dp)
+            text = if (suffix.isBlank()) value.toString() else "$value$suffix",
+            style = MaterialTheme.typography.titleSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(min = 46.dp)
         )
-        TextButton(onClick = { if (value < range.last) onChange(value + 1) }) { Text("＋") }
+        TextButton(onClick = { onChange((value + step).coerceIn(min, max)) }, enabled = value < max) {
+            Text("+", style = MaterialTheme.typography.titleMedium)
+        }
     }
 }
 
 @Composable
-private fun SliderRow(
+fun SetSlider(
     title: String,
-    text: String,
+    valueText: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     onChange: (Float) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Text(
-                text = text,
+                valueText,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Slider(
-            value = value.coerceIn(range.start, range.endInclusive),
+        Slider(value = value, onValueChange = onChange, valueRange = range)
+    }
+}
+
+@Composable
+fun SetChipPicker(
+    title: String,
+    subtitle: String? = null,
+    selected: String,
+    options: List<Pair<String, String>>,
+    onSelect: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyMedium)
+        if (!subtitle.isNullOrBlank()) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEach { pair ->
+                val on = pair.first == selected
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (on) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    },
+                    modifier = Modifier.clickable { onSelect(pair.first) }
+                ) {
+                    Text(
+                        text = pair.second,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (on) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SetTextField(
+    title: String,
+    value: String,
+    subtitle: String? = null,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    onChange: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyMedium)
+        if (!subtitle.isNullOrBlank()) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = value,
             onValueChange = onChange,
-            valueRange = range
+            singleLine = singleLine,
+            minLines = minLines,
+            textStyle = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
 
 @Composable
-private fun ChipPicker(
-    selected: String,
-    options: List<Pair<String, String>>,
-    onSelect: (String) -> Unit
+fun SetInfo(title: String, value: String, subtitle: String? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.End
+        )
+    }
+}
+
+/** 只在二级页里用的行内操作按钮 */
+@Composable
+fun SetAction(
+    title: String,
+    subtitle: String? = null,
+    label: String = "执行",
+    enabled: Boolean = true,
+    onClick: () -> Unit
 ) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(options) { (key, label) ->
-            FilterChip(
-                selected = selected == key,
-                onClick = { onSelect(key) },
-                label = { Text(label, fontSize = 12.sp) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        TextButton(onClick = onClick, enabled = enabled) { Text(label) }
+    }
+}
+
+/** 还没做的功能如实标出来，不装作能用 */
+@Composable
+fun SetSoon(title: String, note: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        ) {
+            Text(
+                text = "开发中",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
             )
         }
     }
 }
+
+@Composable
+fun SetStat(label: String, value: String) {
+    Column {
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 掩码显示一个 Key，避免截图泄漏 */
+fun maskKey(k: String): String =
+    if (k.length <= 10) k.take(4) + "…" else k.take(6) + "…" + k.takeLast(4)

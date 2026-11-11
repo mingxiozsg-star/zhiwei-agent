@@ -19,10 +19,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -97,7 +99,7 @@ fun ConversationDrawer(
             selected = screen == AppScreen.CHAT,
             onClick = { onNavigate(AppScreen.CHAT) }
         )
-        // 「AI 电脑」（终端）与「工作区」的入口放在聊天页的输入栏上，这里不再重复放一份
+        // 「AI 电脑」（终端）与「工作区」的入口放在聊天页顶栏，这里不再重复放一份
         DrawerNavRow(
             icon = Icons.Default.Star,
             label = "记忆库",
@@ -109,18 +111,6 @@ fun ConversationDrawer(
             label = "知识库",
             selected = screen == AppScreen.KNOWLEDGE,
             onClick = { onNavigate(AppScreen.KNOWLEDGE) }
-        )
-        DrawerNavRow(
-            icon = Icons.Default.Search,
-            label = "工具与插件",
-            selected = screen == AppScreen.PLUGINS,
-            onClick = { onNavigate(AppScreen.PLUGINS) }
-        )
-        DrawerNavRow(
-            icon = Icons.Default.Settings,
-            label = "设置",
-            selected = screen == AppScreen.SETTINGS,
-            onClick = { onNavigate(AppScreen.SETTINGS) }
         )
 
         Spacer(Modifier.height(8.dp))
@@ -160,12 +150,90 @@ fun ConversationDrawer(
             item { Spacer(Modifier.height(12.dp)) }
         }
 
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(6.dp))
+
+        // 底部三个快捷入口：角色卡 / 工具 / 设置
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            DrawerQuickButton(
+                icon = Icons.Default.Person,
+                label = "角色卡",
+                selected = screen == AppScreen.ROLE,
+                modifier = Modifier.weight(1f),
+                onClick = { onNavigate(AppScreen.ROLE) }
+            )
+            DrawerQuickButton(
+                icon = Icons.Default.Build,
+                label = "工具",
+                selected = screen == AppScreen.PLUGINS,
+                modifier = Modifier.weight(1f),
+                onClick = { onNavigate(AppScreen.PLUGINS) }
+            )
+            DrawerQuickButton(
+                icon = Icons.Default.Settings,
+                label = "设置",
+                selected = screen == AppScreen.SETTINGS,
+                modifier = Modifier.weight(1f),
+                onClick = { onNavigate(AppScreen.SETTINGS) }
+            )
+        }
+
         Text(
             text = "v$versionName",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 6.dp, top = 4.dp)
+            modifier = Modifier.padding(start = 6.dp, top = 6.dp)
         )
+    }
+}
+
+/** 抽屉底部的快捷入口：图标在上、文字在下，等分宽度 */
+@Composable
+private fun DrawerQuickButton(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        },
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.clickable { onClick() }
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 9.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(19.dp),
+                tint = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                }
+            )
+        }
     }
 }
 

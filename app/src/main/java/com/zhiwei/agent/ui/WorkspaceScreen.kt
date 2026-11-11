@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -59,7 +60,11 @@ import java.util.Locale
  * 终端里跑命令、AI 写出来的文件都落在这儿，这里只是把它列出来看。
  */
 @Composable
-fun WorkspaceScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
+fun WorkspaceScreen(
+    vm: ChatViewModel,
+    onOpenDrawer: () -> Unit = {},
+    onClose: (() -> Unit)? = null
+) {
     val files by vm.workspace.collectAsState()
     val preview by vm.workspacePreview.collectAsState()
     val dir = remember { vm.workspaceDir() }
@@ -75,8 +80,14 @@ fun WorkspaceScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                     .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Default.Menu, contentDescription = "菜单")
+                if (onClose != null) {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "收起")
+                    }
+                } else {
+                    IconButton(onClick = onOpenDrawer) {
+                        Icon(Icons.Default.Menu, contentDescription = "菜单")
+                    }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text("工作区", style = MaterialTheme.typography.titleMedium)

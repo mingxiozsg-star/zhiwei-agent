@@ -23,3 +23,4 @@ build/
 tools/aapt2/
 tools/_*.py
 .kotlin/
+_ref/

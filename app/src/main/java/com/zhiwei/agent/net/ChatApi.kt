@@ -221,21 +221,52 @@ class ChatApi {
         activeCall = call
         try {
             call.execute().use { resp ->
-                val raw = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
+                    val raw = resp.body?.string() ?: ""
                     return AttemptError(
                         describeHttpError(resp.code, raw),
                         retryableCode(resp.code, settings.usableKeys().size)
                     )
                 }
-                if (raw.isBlank()) return AttemptError("服务商返回了空响应", true)
 
-                // 有的网关不认 stream=true，直接回一整段 JSON —— 这里兜住，
-                // 否则会出现「额度扣了，界面却什么都没显示」。
-                val err = if (raw.contains("data:")) {
-                    handleStreamBody(raw, onEvent)
+                val source = resp.body?.source()
+                    ?: return AttemptError("服务商返回了空响应", true)
+
+                // 逐行读取：是 SSE 就边读边回调（真正做到流式），
+                // 不认 stream 参数、直接回一整段 JSON 的网关也能兜住。
+                val c = Chunk()
+                val buffered = StringBuilder()
+                var sse = false
+                var sawAny = false
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    sawAny = true
+                    if (!sse) {
+                        val probe = line.trim()
+                        if (probe.isEmpty()) {
+                            buffered.append('\n')
+                            continue
+                        }
+                        if (isSseLine(probe)) {
+                            sse = true
+                            buffered.setLength(0)
+                            handleSseLine(line, c, onEvent)
+                            continue
+                        }
+                        // 不是 SSE：先按「整段 JSON」攒着，读到底再解析
+                        buffered.append(line).append('\n')
+                        continue
+                    }
+                    handleSseLine(line, c, onEvent)
+                }
+
+                if (!sawAny) return AttemptError("服务商返回了空响应", true)
+                val err = if (sse) {
+                    finishChunk(c, onEvent)
                 } else {
-                    handleWholeBody(raw, onEvent)
+                    val raw = buffered.toString().trim()
+                    if (raw.isEmpty()) AttemptError("服务商返回了空响应", true)
+                    else handleWholeBody(raw, onEvent)
                 }
                 if (err != null) return err
                 onEvent(ChatEvent.Completed)
@@ -262,26 +293,30 @@ class ChatApi {
         val toolAcc = LinkedHashMap<Int, ToolCallBuilder>()
     }
 
-    /** 解析 SSE 正文（逐行 data:） */
-    private fun handleStreamBody(raw: String, onEvent: (ChatEvent) -> Unit): AttemptError? {
-        val c = Chunk()
-        raw.lineSequence().forEach { line ->
-            val l = line.trim()
-            if (l.isEmpty() || l.startsWith(":") || !l.startsWith("data:")) return@forEach
-            val payload = l.substring(5).trim()
-            if (payload.isEmpty() || payload == "[DONE]") return@forEach
-            val json = try {
-                JSONObject(payload)
-            } catch (_: Exception) {
-                return@forEach
-            }
-            readUsage(json, c)
-            val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return@forEach
-            val delta = choice.optJSONObject("delta") ?: choice.optJSONObject("message") ?: return@forEach
-            readText(delta, c, onEvent)
-            readToolCalls(delta.optJSONArray("tool_calls"), c)
+    /** 判断一行是不是 SSE 协议行 */
+    private fun isSseLine(trimmed: String): Boolean =
+        trimmed.startsWith("data:") ||
+            trimmed.startsWith("event:") ||
+            trimmed.startsWith("id:") ||
+            trimmed.startsWith(":") ||
+            trimmed == "[DONE]"
+
+    /** 解析一行 SSE，增量回吐正文与工具调用 */
+    private fun handleSseLine(line: String, c: Chunk, onEvent: (ChatEvent) -> Unit) {
+        val l = line.trim()
+        if (l.isEmpty() || l.startsWith(":") || !l.startsWith("data:")) return
+        val payload = l.substring(5).trim()
+        if (payload.isEmpty() || payload == "[DONE]") return
+        val json = try {
+            JSONObject(payload)
+        } catch (_: Exception) {
+            return
         }
-        return finishChunk(c, onEvent)
+        readUsage(json, c)
+        val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return
+        val delta = choice.optJSONObject("delta") ?: choice.optJSONObject("message") ?: return
+        readText(delta, c, onEvent)
+        readToolCalls(delta.optJSONArray("tool_calls"), c)
     }
 
     /** 解析一次性返回的整段 JSON */

@@ -10,7 +10,9 @@
 
 ### 功能
 
-- **对话**：兼容 OpenAI / DeepSeek / OpenRouter / 各类中转站 / 本地 Ollama 等 `/v1/chat/completions` 接口，支持流式输出与随时中断，一回合只占一条消息，工具调用内嵌其中；输入栏上就放着「AI 电脑」和「工作区」两个入口
+- **对话**：兼容 OpenAI / DeepSeek / OpenRouter / 各类中转站 / 本地 Ollama 等 `/v1/chat/completions` 接口，支持流式输出与随时中断，一回合只占一条消息，工具调用内嵌其中；顶栏就能把「终端」和「工作区」当浮层盖在对话上，再点一次收起，不用跳页
+- **角色卡**：名字、头像、一句话身份、性格说话风格、额外要求、开场白都能自己改，支持人设 JSON 导出与粘贴导入，角色卡会拼进系统提示词，优先级高于内置人设
+- **附件**：点输入栏的 ＋ 选文件，自动复制进工作区 `uploads/`，以 chip 形式挂在输入框上方，模型可以直接读，发完自动清空
 - **密钥池**：一行一个 Key，可自动轮换；一键逐个测活，Key 无效 / 无权限 / 额度用尽分开提示
 - **容错重试**：超时、限流、5xx、断连都会自动重试（默认 6 次，可在设置里改），密钥池不止一个 Key 时重试必定换一个，退避最多等 6 秒；重试用完仍失败会自己补一轮「继续」，不把任务掐断。网关不认流式只回整段 JSON、模型只返回思考内容、上游真的返回空内容，这三种以前会「额度扣了但界面一个字没有」的情况，现在都能正常显示或明确报错
 - **工具调用**：内置 23 个工具，模型可按需自行调用
@@ -21,13 +23,13 @@
 - **工具预算**：时间/计算/设备信息这类本地只读工具不占预算，只有实际操作设备的才计费；默认每回合 12 次，用完了会提示回一句「继续」，不会直接把对话掐断。同一次提问里同参数的工具只真跑一遍，重复要求复用上次结果
 - **记忆库**：聊完自动沉淀长期事实，新对话自动带上；可手动增删置顶，也能按需重抽
 - **知识库**：粘贴正文或只给网址自动抓取，回答时按段引用
-- **提示词库**：常用问法存本机，聊天页输入栏的 ＋ 里点一下就填进输入框；自带 5 条，可自行增删改，支持 `{time}` / `{model}` 变量
+- **提示词库**：常用问法存本机，聊天页右上角 ⋮ →「快捷短语」点一下就填进输入框；自带 5 条，可自行增删改，支持 `{time}` / `{model}` 变量
 - **自定义插件**：HTTP 接口 / 本机命令 / MCP 工具三种，导入后可先试跑
 - **用量统计**：只记服务端返回的 token，按模型分账，全部留在本机，可随时清零
 - **终端**：独立的终端页，快捷命令一键填入，输出实时滚动；入口在聊天页输入栏的「AI 电脑」
 - **工作区**：智能体的 home 目录直接列出来——大小、修改时间、点开预览、长按删除；跟终端是同一个目录，AI 在终端里写出来的文件立刻就能看到
-- **会话**：多会话、重命名、删除、导出 Markdown、长按消息复制或重新生成
-- **设置**：按用途分成十类——接口、API 密钥池、智能体（含重试次数、出错后自动继续、设备操控开关、每回合工具预算）、提示词库、记忆与知识、生成参数（温度/Top-P/频率惩罚/存在惩罚/最大长度）、外观（主题、字号缩放、抽屉宽度）、显示与行为（工具折叠方式、消息时间、屏幕常亮、完成提醒、发送震动）、用量统计、数据，最底下是「关于我们」
+- **会话**：多会话、重命名、删除、导出文本、长按消息删除、重新生成
+- **设置**：十三类、两级结构——首页只列「标题 ＋ 图标 ＋ 一行小字简介」，点进分类才是具体开关：模型与 API、智能体人设、技能 Skills、工具与权限、使用统计、主题与字体、对话管理、工作区管理、联动扩展、网络与安全、通知、快捷键与手势、关于与赞助。还没做的功能如实标「开发中」，不装作能用
 - **内置更新**：「关于我们」里检查新版本，显示版本号、更新说明与安装包大小，一键跳转下载（镜像 / 原站），只检查不自己装
 - **外观**：樱粉×冰蓝配色，跟随系统 / 浅色 / 深色三态切换
 - **隐私**：不经过任何第三方中转服务器，会话只落在 `filesDir/conversations.json`，用量只落在 `filesDir/stats.json`
@@ -38,7 +40,7 @@
 
 ### 快速开始
 
-1. 打开折叠栏 →「设置」→「接口」
+1. 打开折叠栏 →「设置」→「模型与 API」→ 接口地址
 2. 填 `API 地址`（例如 `https://api.openai.com/v1`）和 `API Key`
 3. 点「获取列表」挑一个模型，或直接手写模型名
 4. 回到「对话」，开始聊
@@ -74,7 +76,9 @@ An AI agent that lives in your phone. Point it at any OpenAI-compatible endpoint
 
 ### Features
 
-- **Chat** — works with OpenAI / DeepSeek / OpenRouter / relay services / local Ollama via `/v1/chat/completions`, with streaming output and instant stop. One turn takes one message, tool calls inline; the input bar carries two entries, **AI computer** and **Workspace**
+- **Chat** — works with OpenAI / DeepSeek / OpenRouter / relay services / local Ollama via `/v1/chat/completions`, with streaming output and instant stop. One turn takes one message, tool calls inline; the top bar lays **Terminal** and **Workspace** over the chat as overlays — tap again to dismiss, no page jumping
+- **Persona card** — name, avatar, one-line identity, personality, extra instructions and greeting are all yours to edit, with JSON export and paste-import. The card is appended to the system prompt and outranks the built-in persona
+- **Attachments** — tap ＋ in the input bar, pick files, and they land in the workspace `uploads/` as chips above the input; the model reads them directly
 - **Key pool** — one key per line, optionally rotating; test them all in one tap, with invalid / unauthorised / quota-exhausted told apart
 - **Retries that actually retry** — timeouts, rate limits, 5xx and dropped connections are retried automatically (6 times by default, adjustable), always switching to another key when the pool has more than one, backing off up to 6 seconds; if retries run out the agent adds its own "continue" instead of killing the task. A gateway that ignores `stream:true` and returns one plain JSON blob, a model that only returns its reasoning, or genuinely empty upstream output — the three cases that used to burn tokens and print nothing — now either render or fail with a clear reason
 - **Tool calling** — 23 built-in tools the model can invoke on its own
@@ -85,13 +89,13 @@ An AI agent that lives in your phone. Point it at any OpenAI-compatible endpoint
 - **Tool budget** — local read-only tools (time, calculator, device info) are free; only tools that touch the device are billed. 12 per turn by default, and running out prompts you to reply "continue" instead of cutting the conversation off. Within one question, an identical call with identical arguments runs once; repeats reuse the previous result
 - **Memory** — long-term facts distilled from your chats and carried into new conversations; add, edit, pin or re-extract at will
 - **Knowledge** — paste text or just hand it a URL; answers cite the matching paragraphs
-- **Prompt library** — save your usual phrasings on device and tap one in the chat input's ＋ to fill it in; five are seeded, you can add, edit or delete them, and `{time}` / `{model}` get substituted
+- **Prompt library** — save your usual phrasings on device and tap one under ⋮ → **Quick phrases** in the chat top bar to fill it in; five are seeded, you can add, edit or delete them, and `{time}` / `{model}` get substituted
 - **Plugins** — HTTP endpoint, local command or MCP tool; test-run before enabling
 - **Usage stats** — counts only what the server reports, broken down per model, stored on device, clearable anytime
 - **Terminal** — dedicated tab, quick commands, live scrolling output; reached via **AI computer** in the chat input bar
 - **Workspace** — the agent's home directory laid out plainly: size, modified time, tap to preview, long-press to delete. Same directory the terminal uses, so anything the agent writes shows up immediately
-- **Sessions** — multiple conversations, rename, delete, export Markdown, long-press to copy or regenerate
-- **Settings** — grouped into ten sections by purpose: endpoint, API key pool, agent (retry count, auto-continue after failure, device-control switch, per-turn tool budget), prompt library, memory and knowledge, generation (temperature / Top-P / penalties / max length), appearance (theme, font scale, drawer width), display and behaviour (tool-call folding, message time, keep screen on, finish notification, haptic on send), usage stats, data — with **About us** at the bottom
+- **Sessions** — multiple conversations, rename, delete, export text, long-press to delete a message, regenerate
+- **Settings** — thirteen groups, two levels: the list shows only a title, an icon and a one-line summary, and the switches live one level down: Model & API, Persona, Skills, Tools & permissions, Usage, Theme & fonts, Conversations, Workspace, Integrations, Network & security, Notifications, Shortcuts & gestures, About & support. Anything not built yet is labelled "in progress" instead of being faked
 - **Built-in update check** — tap it under About us to see the newest version, its notes and APK size, then jump to the download (mirror / original). It checks and links, nothing installs itself
 - **Look** — sakura pink × ice blue theme, system / light / dark modes
 - **Privacy** — no third-party relay server; conversations in `filesDir/conversations.json`, usage in `filesDir/stats.json`
@@ -102,7 +106,7 @@ Grab `app-release.apk` from [Releases](../../releases). A fixed keystore is bund
 
 ### Quick start
 
-1. Open **Settings → Endpoint**
+1. Open the drawer → **Settings → Model & API → endpoint**
 2. Enter `API base URL` (e.g. `https://api.openai.com/v1`) and your `API key`
 3. Tap **Fetch models** and pick one, or type a model name
 4. Go back to **Chat** and start talking

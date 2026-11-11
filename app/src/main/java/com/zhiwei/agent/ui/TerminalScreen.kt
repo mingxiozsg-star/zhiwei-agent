@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -54,7 +55,11 @@ private val TermErr = Color(0xFFFF8A80)
 
 /** 普通终端的样子：黑底、等宽、一个提示符，没有卡片和气泡 */
 @Composable
-fun TerminalScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
+fun TerminalScreen(
+    vm: ChatViewModel,
+    onOpenDrawer: () -> Unit = {},
+    onClose: (() -> Unit)? = null
+) {
     val lines by vm.terminalLines.collectAsState()
     val busy by vm.terminalBusy.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
@@ -84,8 +89,14 @@ fun TerminalScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                 .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onOpenDrawer) {
-                Icon(Icons.Default.Menu, contentDescription = "菜单", tint = TermText)
+            if (onClose != null) {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "收起", tint = TermText)
+                }
+            } else {
+                IconButton(onClick = onOpenDrawer) {
+                    Icon(Icons.Default.Menu, contentDescription = "菜单", tint = TermText)
+                }
             }
             Text(
                 text = "终端 · sh（应用沙箱）",

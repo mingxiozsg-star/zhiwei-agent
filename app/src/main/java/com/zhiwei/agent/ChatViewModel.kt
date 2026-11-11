@@ -4,11 +4,13 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zhiwei.agent.agent.AgentEnv
 import com.zhiwei.agent.agent.ShellRunner
 import com.zhiwei.agent.agent.ToolRegistry
+import com.zhiwei.agent.agent.ToolSpec
 import com.zhiwei.agent.data.ACT_DONE
 import com.zhiwei.agent.data.ACT_ERROR
 import com.zhiwei.agent.data.ACT_RUNNING
@@ -20,6 +22,8 @@ import com.zhiwei.agent.data.KnowledgeItem
 import com.zhiwei.agent.data.KnowledgeStore
 import com.zhiwei.agent.data.MemoryItem
 import com.zhiwei.agent.data.MemoryStore
+import com.zhiwei.agent.data.Persona
+import com.zhiwei.agent.data.PersonaStore
 import com.zhiwei.agent.data.PluginStore
 import com.zhiwei.agent.data.PluginTool
 import com.zhiwei.agent.data.PromptStore
@@ -55,7 +59,15 @@ data class TerminalLine(
 )
 
 /** 抽屉里的功能页 */
-enum class AppScreen { CHAT, TERMINAL, WORKSPACE, MEMORY, KNOWLEDGE, PLUGINS, SETTINGS }
+enum class AppScreen { CHAT, TERMINAL, WORKSPACE, MEMORY, KNOWLEDGE, PLUGINS, SETTINGS, ROLE }
+
+/** 会话里挂着的附件：已经复制进工作区，智能体可以直接读 */
+data class Attachment(
+    val id: String,
+    val name: String,
+    val path: String,
+    val size: Long
+)
 
 /** 工作区里的一个条目 */
 data class WorkspaceEntry(
@@ -80,6 +92,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val pluginStore = PluginStore(app)
     private val statsStore = StatsStore(app)
     private val promptStore = PromptStore(app)
+    private val personaStore = PersonaStore(app)
     private val api = ChatApi()
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
@@ -146,6 +159,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 更新检查结果 */
     private val _update = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val update: StateFlow<UpdateState> = _update.asStateFlow()
+    /** 角色卡：智能体的人设，用户可自己编辑 */
+    private val _persona = MutableStateFlow(personaStore.load())
+    val persona: StateFlow<Persona> = _persona.asStateFlow()
+    /** 当前这条消息要带上的附件 */
+    private val _attachments = MutableStateFlow<List<Attachment>>(emptyList())
+    val attachments: StateFlow<List<Attachment>> = _attachments.asStateFlow()
     private val statsLock = Any()
 
     private var runJob: Job? = null
@@ -280,17 +299,150 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- 对话 ----------
 
     fun send(text: String) {
-        if (_busy.value) return
+        // 卡住的忙状态要能自愈：只有真在跑的任务才拦截发送，
+        // 否则会出现「发出去没反应、后端也看不到请求」。
+        if (_busy.value) {
+            if (runJob?.isActive == true) return
+            _busy.value = false
+        }
         val input = text.trim()
-        if (input.isEmpty()) return
+        val pending = _attachments.value
+        if (input.isEmpty() && pending.isEmpty()) return
         ensureConversation()
-        val newTitle = if (_messages.value.none { it.role == ROLE_USER }) input.take(18) else null
+        val body = buildUserMessage(input, pending)
+        val newTitle = if (_messages.value.none { it.role == ROLE_USER }) {
+            input.ifBlank { pending.first().name }.take(18)
+        } else {
+            null
+        }
         setMessages(
-            _messages.value + ChatMessage(role = ROLE_USER, content = input),
+            _messages.value + ChatMessage(role = ROLE_USER, content = body),
             persist = true,
             newTitle = newTitle
         )
+        clearAttachments()
         startRun()
+    }
+
+    /** 用户消息 + 附件清单（附件已落进工作区，把路径告诉智能体它就能直接读） */
+    private fun buildUserMessage(input: String, list: List<Attachment>): String {
+        if (list.isEmpty()) return input
+        val sb = StringBuilder(input)
+        if (sb.isNotEmpty()) sb.append("\n\n")
+        sb.append("【附件】已放进工作区，可以直接读取：\n")
+        list.forEach { a -> sb.append("- ").append(a.name).append(" → ").append(a.path).append('\n') }
+        return sb.toString().trim()
+    }
+
+    // ---------- 附件 ----------
+
+    /** 把用户选的文件复制进工作区的 uploads/，之后智能体就能直接读 */
+    fun attachFiles(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val added = withContext(Dispatchers.IO) { copyIntoWorkspace(uris) }
+            if (added.isEmpty()) {
+                _notice.value = "没能读取所选文件"
+                return@launch
+            }
+            _attachments.update { it + added }
+            _notice.value = "已加入 ${added.size} 个附件"
+        }
+    }
+
+    private fun copyIntoWorkspace(uris: List<Uri>): List<Attachment> {
+        val app = getApplication<Application>()
+        val dir = File(ShellRunner.homeDir(app.filesDir), "uploads")
+        if (!dir.exists()) dir.mkdirs()
+        val out = mutableListOf<Attachment>()
+        uris.forEach { uri ->
+            try {
+                val name = queryDisplayName(uri) ?: ("file_" + System.currentTimeMillis())
+                var target = File(dir, name)
+                if (target.exists()) {
+                    val base = name.substringBeforeLast('.', name)
+                    val ext = name.substringAfterLast('.', "")
+                    target = File(dir, base + "_" + System.currentTimeMillis() % 100000 + if (ext.isEmpty()) "" else ".$ext")
+                }
+                app.contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                } ?: return@forEach
+                out.add(
+                    Attachment(
+                        id = target.absolutePath,
+                        name = target.name,
+                        path = target.absolutePath,
+                        size = target.length()
+                    )
+                )
+            } catch (_: Exception) {
+            }
+        }
+        return out
+    }
+
+    private fun queryDisplayName(uri: Uri): String? = try {
+        val app = getApplication<Application>()
+        app.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    fun removeAttachment(id: String) {
+        _attachments.update { list -> list.filterNot { it.id == id } }
+    }
+
+    fun clearAttachments() {
+        _attachments.value = emptyList()
+    }
+
+    // ---------- 角色卡 ----------
+
+    fun updatePersona(transform: (Persona) -> Persona) {
+        val next = transform(_persona.value)
+        _persona.value = next
+        viewModelScope.launch(Dispatchers.IO) { personaStore.save(next) }
+    }
+
+    fun resetPersona() {
+        updatePersona { Persona() }
+        _notice.value = "角色卡已恢复默认"
+    }
+
+    /** 导出角色卡为 JSON 文本，方便用户备份/分享人设 */
+    fun exportPersonaJson(): String = _persona.value.toJson().toString(2)
+
+    /** 从一段 JSON 文本导入角色卡；解析失败返回 false */
+    fun importPersonaJson(raw: String): Boolean {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) return false
+        return try {
+            val parsed = Persona.fromJson(JSONObject(raw.substring(start, end + 1)))
+            _persona.value = parsed
+            viewModelScope.launch(Dispatchers.IO) { personaStore.save(parsed) }
+            _notice.value = "角色卡已导入"
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 角色卡 + 工具清单 + 记忆/知识，合成这一回合真正下发的系统提示词 */
+    fun composeSystemPrompt(s: AppSettings = _settings.value, tools: List<ToolSpec>? = null): String {
+        val sb = StringBuilder(s.systemPrompt.trim())
+        sb.append(_persona.value.block())
+        val list = tools ?: if (s.enableTools) {
+            ToolRegistry.specs(env())
+        } else {
+            emptyList()
+        }
+        sb.append(toolManifest(list))
+        if (s.injectContext) sb.append(contextBlocks(s, ""))
+        return sb.toString()
     }
 
     fun stopGenerating() {
@@ -362,7 +514,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         val text = StringBuilder()
         val query = _messages.value.lastOrNull { it.role == ROLE_USER }?.content ?: ""
-        val effective = if (settings.injectContext) injectContext(settings, query) else settings
+        // 一回合的系统提示词 = 基础提示词 + 角色卡 + 工具清单 + 记忆/知识命中
+        val effective = settings.copy(systemPrompt = composeSystemPrompt(settings, tools))
         var budgetUsed = 0
         var pendingUsage: ChatEvent.Usage? = null
         // 本地只读工具（时间、计算器、设备信息、记忆检索…）免费，不占预算
@@ -609,18 +762,49 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         pluginList = _plugins.value
     )
 
-    private fun injectContext(s: AppSettings, query: String): AppSettings {
+    /**
+     * 记忆库 + 知识库的命中片段，拼成一段可直接喂给模型的上下文。
+     * query 为空时（例如刚开局）只取最近的记忆，不硬套相关性检索。
+     */
+    private fun contextBlocks(s: AppSettings, query: String): String {
         val blocks = StringBuilder()
-        val mems = memoryStore.search(_memories.value, query, s.memoryTopK)
+        val mems = if (query.isBlank()) _memories.value.take(s.memoryTopK)
+        else memoryStore.search(_memories.value, query, s.memoryTopK)
         if (mems.isNotEmpty()) {
             blocks.append("\n\n【记忆库】跨对话长期记忆，直接当已知事实用，不要问用户是否记得：\n")
             mems.forEach { blocks.append("- ").append(it.text).append('\n') }
         }
-        val hits = knowledgeStore.search(_knowledge.value, query, s.knowledgeTopK)
-        if (hits.isNotEmpty()) {
-            blocks.append("\n【知识库片段】用户导入的资料，回答时优先依据这些内容：\n")
-            hits.forEach { blocks.append("〔").append(it.title).append("〕").append(it.text.take(900)).append('\n') }
+        if (query.isNotBlank()) {
+            val hits = knowledgeStore.search(_knowledge.value, query, s.knowledgeTopK)
+            if (hits.isNotEmpty()) {
+                blocks.append("\n【知识库片段】用户导入的资料，回答时优先依据这些内容：\n")
+                hits.forEach { blocks.append("〔").append(it.title).append("〕").append(it.text.take(900)).append('\n') }
+            }
         }
+        return blocks.toString()
+    }
+
+    /**
+     * 把本轮真正可用的工具清单写进系统提示词。
+     * 模型看得到「自己手上有什么工具」，才不会一上来就说「我做不到」。
+     */
+    private fun toolManifest(tools: List<ToolSpec>): String {
+        if (tools.isEmpty()) {
+            return "\n\n【当前可用工具】无。这一轮工具调用是关闭的，只能靠你已有的知识回答；" +
+                "如果用户要的操作必须用工具，就直接说明需要先把「工具」打开。"
+        }
+        val sb = StringBuilder()
+        sb.append("\n\n【当前可用工具】下面这些是你这一轮可以真正调用的能力，需要就用，不要只是嘴上说说：\n")
+        tools.forEach { t -> sb.append("- ").append(t.name).append("（").append(t.label).append("）：").append(t.description).append('\n') }
+        sb.append("调用规则：先想清楚要不要用工具，该用就直接调，一次可以调多个；")
+        sb.append("不要先描述「我打算调用某工具」再等用户点确认，直接调；")
+        sb.append("工具返回结果之后，用自然语言把结论讲给用户，不要只交一坨原始输出。")
+        return sb.toString()
+    }
+
+    /** 兼容旧调用：把上下文塞进 settings 的 systemPrompt 里 */
+    private fun injectContext(s: AppSettings, query: String): AppSettings {
+        val blocks = contextBlocks(s, query)
         if (blocks.isEmpty()) return s
         return s.copy(systemPrompt = s.systemPrompt + blocks)
     }

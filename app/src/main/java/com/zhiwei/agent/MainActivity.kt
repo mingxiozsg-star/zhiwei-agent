@@ -52,6 +52,7 @@ import com.zhiwei.agent.ui.ConversationDrawer
 import com.zhiwei.agent.ui.KnowledgeScreen
 import com.zhiwei.agent.ui.MemoryScreen
 import com.zhiwei.agent.ui.PluginsScreen
+import com.zhiwei.agent.ui.RoleScreen
 import com.zhiwei.agent.ui.SettingsScreen
 import com.zhiwei.agent.ui.TerminalScreen
 import com.zhiwei.agent.ui.WorkspaceScreen
@@ -91,6 +92,9 @@ fun ZhiweiApp(vm: ChatViewModel) {
     var screenName by rememberSaveable { mutableStateOf(AppScreen.CHAT.name) }
     val screen = runCatching { AppScreen.valueOf(screenName) }.getOrDefault(AppScreen.CHAT)
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    // 覆盖层：终端 / 工作区盖在对话页上面，不跳页；再点一次同一个按钮就收起
+    var overlayName by rememberSaveable { mutableStateOf<String?>(null) }
+    val overlay = overlayName?.let { n -> AppScreen.entries.firstOrNull { it.name == n } }
 
     var renameTarget by remember { mutableStateOf<Conversation?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -114,7 +118,9 @@ fun ZhiweiApp(vm: ChatViewModel) {
         }
     }
 
-    BackHandler(enabled = drawerOpen) { drawerOpen = false }
+    BackHandler(enabled = drawerOpen || overlay != null) {
+        if (drawerOpen) drawerOpen = false else overlayName = null
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val ratio = settings.drawerRatio.coerceIn(0.32f, 0.72f)
@@ -152,8 +158,13 @@ fun ZhiweiApp(vm: ChatViewModel) {
                                 vm = vm,
                                 onOpenDrawer = { drawerOpen = true },
                                 onNavigate = {
+                                    overlayName = null
                                     screenName = it.name
                                     drawerOpen = false
+                                },
+                                overlay = overlay,
+                                onToggleOverlay = { target ->
+                                    overlayName = if (overlayName == target.name) null else target.name
                                 }
                             )
                             AppScreen.TERMINAL -> TerminalScreen(
@@ -184,8 +195,43 @@ fun ZhiweiApp(vm: ChatViewModel) {
 
                             AppScreen.SETTINGS -> SettingsScreen(
                                 vm = vm,
+                                onOpenDrawer = { drawerOpen = true },
+                                onNavigate = {
+                                    overlayName = null
+                                    screenName = it.name
+                                    drawerOpen = false
+                                }
+                            )
+
+                            AppScreen.ROLE -> RoleScreen(
+                                vm = vm,
                                 onOpenDrawer = { drawerOpen = true }
                             )
+                        }
+
+                        // 覆盖层：终端 / 工作区盖在对话页上，顶栏左侧按钮收起
+                        val ov = overlay
+                        if (ov != null && screen == AppScreen.CHAT) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.background,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                when (ov) {
+                                    AppScreen.TERMINAL -> TerminalScreen(
+                                        vm = vm,
+                                        onOpenDrawer = { drawerOpen = true },
+                                        onClose = { overlayName = null }
+                                    )
+
+                                    AppScreen.WORKSPACE -> WorkspaceScreen(
+                                        vm = vm,
+                                        onOpenDrawer = { drawerOpen = true },
+                                        onClose = { overlayName = null }
+                                    )
+
+                                    else -> Unit
+                                }
+                            }
                         }
                     }
                 }
@@ -244,6 +290,7 @@ fun ZhiweiApp(vm: ChatViewModel) {
                         },
                         onDelete = { id -> vm.deleteConversation(id) },
                         onNavigate = {
+                            overlayName = null
                             screenName = it.name
                             drawerOpen = false
                         }
