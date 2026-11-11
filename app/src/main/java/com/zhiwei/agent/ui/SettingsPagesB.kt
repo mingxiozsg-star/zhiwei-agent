@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.zhiwei.agent.AppScreen
+import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.data.COLLAPSE_MULTI
 import com.zhiwei.agent.data.COLLAPSE_NONE
 import com.zhiwei.agent.data.COLLAPSE_SINGLE
