@@ -93,13 +93,21 @@ data class ChatMessage(
     val toolName: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val isError: Boolean = false,
-    val streaming: Boolean = false
+    val streaming: Boolean = false,
+    /** 模型这一轮的思维链：单独一条通道，绝不混进正文 */
+    val reasoning: String = "",
+    /** 用户随消息发出去的图片本地路径（多模态直传给模型看） */
+    val images: List<String> = emptyList()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("role", role)
         put("content", content)
         put("timestamp", timestamp)
+        if (reasoning.isNotBlank()) put("reasoning", reasoning)
+        if (images.isNotEmpty()) {
+            put("images", JSONArray().apply { images.forEach { put(it) } })
+        }
         if (toolCalls.isNotEmpty()) {
             put("toolCalls", JSONArray().apply { toolCalls.forEach { put(it.toJson()) } })
         }
@@ -125,6 +133,13 @@ data class ChatMessage(
                     acts.add(ToolActivity.fromJson(arr.getJSONObject(i)))
                 }
             }
+            val imgs = mutableListOf<String>()
+            o.optJSONArray("images")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val p = arr.optString(i, "")
+                    if (p.isNotBlank()) imgs.add(p)
+                }
+            }
             return ChatMessage(
                 id = o.optString("id", UUID.randomUUID().toString()),
                 role = o.optString("role", ROLE_USER),
@@ -134,7 +149,9 @@ data class ChatMessage(
                 toolCallId = if (o.isNull("toolCallId")) null else o.optString("toolCallId", "").ifEmpty { null },
                 toolName = if (o.isNull("toolName")) null else o.optString("toolName", "").ifEmpty { null },
                 timestamp = o.optLong("timestamp", System.currentTimeMillis()),
-                isError = o.optBoolean("isError", false)
+                isError = o.optBoolean("isError", false),
+                reasoning = o.optString("reasoning", ""),
+                images = imgs
             )
         }
     }

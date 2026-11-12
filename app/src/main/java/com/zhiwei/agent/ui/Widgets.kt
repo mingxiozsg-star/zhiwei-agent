@@ -61,7 +61,8 @@ fun MessageItem(
     onDelete: () -> Unit,
     onRegenerate: (() -> Unit)? = null,
     showTimestamp: Boolean = false,
-    collapseMode: String = COLLAPSE_MULTI
+    collapseMode: String = COLLAPSE_MULTI,
+    showReasoning: Boolean = true
 ) {
     var menu by remember { mutableStateOf(false) }
 
@@ -115,6 +116,10 @@ fun MessageItem(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        if (showReasoning && message.reasoning.isNotBlank()) {
+                            ReasoningFold(message.reasoning)
+                            Spacer(Modifier.height(8.dp))
+                        }
                         if (message.activities.isNotEmpty()) {
                             ToolActivityGroup(
                                 messageId = message.id,
@@ -480,6 +485,51 @@ fun EmptyChatHint(greeting: String? = null, onSuggestion: (String) -> Unit) {
                     text = s,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 思考过程：默认折起来，点一下展开。
+ * 模型思维链（reasoning / thinking）只在这里出现，绝不混进正文。
+ */
+@Composable
+fun ReasoningFold(text: String) {
+    var open by remember(text) { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(text) { detectTapGestures(onTap = { open = !open }) },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (open) "▾ 思考过程" else "▸ 思考过程",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "${text.length} 字",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+        }
+        if (open) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+            ) {
+                Text(
+                    text = text,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

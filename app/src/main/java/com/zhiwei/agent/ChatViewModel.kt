@@ -8,6 +8,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zhiwei.agent.agent.AgentEnv
+import com.zhiwei.agent.agent.ImageSupport
 import com.zhiwei.agent.agent.ShellRunner
 import com.zhiwei.agent.agent.ToolRegistry
 import com.zhiwei.agent.agent.ToolSpec
@@ -61,12 +62,14 @@ data class TerminalLine(
 /** 抽屉里的功能页 */
 enum class AppScreen { CHAT, TERMINAL, WORKSPACE, MEMORY, KNOWLEDGE, PLUGINS, SETTINGS, ROLE }
 
-/** 会话里挂着的附件：已经复制进工作区，智能体可以直接读 */
+/** 会话里挂着的附件：已经复制进工作区；图片会按多模态直接给模型看 */
 data class Attachment(
     val id: String,
     val name: String,
     val path: String,
-    val size: Long
+    val size: Long,
+    /** image / text / other */
+    val kind: String = "other"
 )
 
 /** 工作区里的一个条目 */
@@ -309,28 +312,47 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val pending = _attachments.value
         if (input.isEmpty() && pending.isEmpty()) return
         ensureConversation()
-        val body = buildUserMessage(input, pending)
+        // 图片走多模态直传；文本类附件把内容内联进提问，其余只给路径
+        val images = if (_settings.value.sendImages) {
+            pending.filter { it.kind == "image" }.map { it.path }
+        } else {
+            emptyList()
+        }
+        val body = buildUserMessage(input, pending.filterNot { it.kind == "image" })
         val newTitle = if (_messages.value.none { it.role == ROLE_USER }) {
             input.ifBlank { pending.first().name }.take(18)
         } else {
             null
         }
         setMessages(
-            _messages.value + ChatMessage(role = ROLE_USER, content = body),
+            _messages.value + ChatMessage(role = ROLE_USER, content = body, images = images),
             persist = true,
             newTitle = newTitle
         )
         clearAttachments()
         startRun()
     }
-
-    /** 用户消息 + 附件清单（附件已落进工作区，把路径告诉智能体它就能直接读） */
+    /**
+     * 用户消息正文。
+     * 图片不在这里（走 images 字段直传）；文本类附件把内容读进来，省得模型再要一次，
+     * 读不了或太大的就给路径 + 提示它用 read_file 工具自己取。
+     */
     private fun buildUserMessage(input: String, list: List<Attachment>): String {
         if (list.isEmpty()) return input
         val sb = StringBuilder(input)
-        if (sb.isNotEmpty()) sb.append("\n\n")
-        sb.append("【附件】已放进工作区，可以直接读取：\n")
-        list.forEach { a -> sb.append("- ").append(a.name).append(" → ").append(a.path).append('\n') }
+        val files = list.filter { it.kind != "image" }
+        if (files.isEmpty()) return input
+        sb.append(if (sb.isNotEmpty()) "\n\n" else "")
+        files.forEach { a ->
+            val text = if (a.kind == "text") ImageSupport.inlineText(a.path) else null
+            if (text != null) {
+                sb.append("【附件 ").append(a.name).append("】\n```\n").append(text).append("\n```\n")
+                if (a.size > text.length) sb.append("（内容较长，这里只给了前面一部分，需要全文就用 read_file 读 ").append(a.path).append("）\n")
+            } else {
+                sb.append("【附件 ").append(a.name).append("】").append(readableSize(a.size))
+                sb.append("，已放进工作区：").append(a.path).append("（用 read_file 可以读）\n")
+            }
+        }
         return sb.toString().trim()
     }
 
@@ -372,7 +394,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         id = target.absolutePath,
                         name = target.name,
                         path = target.absolutePath,
-                        size = target.length()
+                        size = target.length(),
+                        kind = ImageSupport.kind(target.name)
                     )
                 )
             } catch (_: Exception) {
@@ -398,6 +421,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun clearAttachments() {
         _attachments.value = emptyList()
     }
+    /** 图片走多模态直传：本地路径 → data URL。读不到就按没图处理，不让整轮请求挂掉 */
+    private fun imageDataUrl(path: String): String? =
+        ImageSupport.dataUrl(path, _settings.value.imageMaxSide)
 
     // ---------- 角色卡 ----------
 
@@ -513,6 +539,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         appendLocal(placeholder)
 
         val text = StringBuilder()
+        // 思维链单独攒一条通道，只用于折叠展示，绝不当正文
+        val reasoning = StringBuilder()
+        // 只回了思考时，自动补要一次正文（只补一次，不惯着）
+        var nudged = 0
+        var nudge: String? = null
+        // 工具刚截的图：下一轮作为一条用户消息带回对话，模型才能直接看图
+        val shotImages = mutableListOf<String>()
         val query = _messages.value.lastOrNull { it.role == ROLE_USER }?.content ?: ""
         // 一回合的系统提示词 = 基础提示词 + 角色卡 + 工具清单 + 记忆/知识命中
         val effective = settings.copy(systemPrompt = composeSystemPrompt(settings, tools))
@@ -538,8 +571,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             var calls: List<ToolCall> = emptyList()
             var failure: String? = null
+            var reasoningOnly = false
             val base = text.toString()
             var roundText = StringBuilder()
+            var roundReasoning = StringBuilder()
             val snapshot = _messages.value
             // 本回合前面几轮已经跑过的工具调用必须带进历史，否则模型看不到结果，
             // 会以为工具没生效，一遍遍重调同一个工具。
@@ -550,14 +585,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         add(cur.copy(streaming = false))
                     }
                 }
+                // 只为这一轮追加的临时提醒，不落进会话历史
+                nudge?.let { add(ChatMessage(role = ROLE_USER, content = it)) }
+                // 工具刚截的图：包成一条用户消息，模型才能以多模态方式看图
+                if (shotImages.isNotEmpty()) {
+                    add(
+                        ChatMessage(
+                            role = ROLE_USER,
+                            content = "（下面是刚截的图，直接看图）",
+                            images = shotImages.toList()
+                        )
+                    )
+                }
             }
 
-            api.streamChat(effective, history, tools) { event ->
+            api.streamChat(effective, history, tools, imageLoader = { p -> imageDataUrl(p) }) { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
                         roundText.append(event.text)
                         replaceLocal(placeholder.id) {
                             it.copy(content = base + roundText.toString(), streaming = true)
+                        }
+                    }
+
+                    is ChatEvent.Reasoning -> {
+                        roundReasoning.append(event.text)
+                        replaceLocal(placeholder.id) {
+                            it.copy(reasoning = reasoning.toString() + roundReasoning.toString(), streaming = true)
                         }
                     }
 
@@ -569,13 +623,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     ChatEvent.Restart -> {
                         // 上一次尝试的半截输出丢掉，免得重试后内容重复
                         roundText = StringBuilder()
+                        roundReasoning = StringBuilder()
                         replaceLocal(placeholder.id) { it.copy(content = base, streaming = true) }
                     }
+                    ChatEvent.ReasoningOnly -> reasoningOnly = true
                     is ChatEvent.Failure -> failure = event.message
                     ChatEvent.Completed -> Unit
                 }
             }
             _netStatus.value = null
+            // 思考过程累加进本轮总账，只用于折叠展示，绝不混进正文
+            if (roundReasoning.isNotEmpty()) reasoning.append(roundReasoning)
             pendingUsage?.let { u ->
                 recordUsage(effective.model, u.prompt, u.completion)
                 pendingUsage = null
@@ -606,6 +664,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             text.append(roundText)
             replaceLocal(placeholder.id) { it.copy(content = text.toString(), streaming = true) }
+
+            // 只回了思考、正文一个字没给：自动补要一次正文（只补一次，不惯着）
+            if (calls.isEmpty() && roundText.isBlank() && reasoningOnly && nudged == 0) {
+                nudged++
+                nudge = "刚才只输出了思考过程，没有给正文。现在直接给结论，一两句话说清楚，不要重复思考过程。"
+                replaceLocal(placeholder.id) {
+                    it.copy(reasoning = reasoning.toString(), streaming = true)
+                }
+                continue
+            }
+            nudge = null
 
             if (calls.isEmpty()) break
 
@@ -652,6 +721,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (cached != null) return@forEach
                 val outcome = ToolRegistry.execute(env, call.name, call.arguments)
                 seenCalls[memoKey] = outcome.text
+                if (outcome.images.isNotEmpty()) shotImages.addAll(outcome.images)
                 outcome.newMemory?.let { addMemoryItem(it, persist = true) }
                 outcome.newKnowledge?.let { addKnowledgeItem(it, persist = true) }
                 val failed = outcome.text.startsWith("工具执行失败")

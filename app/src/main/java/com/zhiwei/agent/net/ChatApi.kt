@@ -25,12 +25,16 @@ import kotlin.random.Random
 /** 流式对话过程中产生的事件 */
 sealed class ChatEvent {
     data class Delta(val text: String) : ChatEvent()
+    /** 模型思维链增量：单独一条通道，只用来折叠展示，绝不混进正文 */
+    data class Reasoning(val text: String) : ChatEvent()
     data class ToolCalls(val calls: List<ToolCall>) : ChatEvent()
     data class Usage(val prompt: Int, val completion: Int) : ChatEvent()
     /** 第 attempt 次重试（一共 total 次），reason 是上一次失败的原因 */
     data class Retry(val attempt: Int, val total: Int, val reason: String) : ChatEvent()
     /** 重试前要求上层丢掉上一次尝试已经流出的半截内容 */
     object Restart : ChatEvent()
+    /** 这一轮只回了思考，没有正文也没有工具调用（多为 max_tokens 被思考吃光） */
+    object ReasoningOnly : ChatEvent()
     data class Failure(val message: String) : ChatEvent()
     object Completed : ChatEvent()
 }
@@ -49,6 +53,9 @@ data class ChatResult(
  * 以及「服务商报错就换 Key 重试」的容错逻辑（重试次数在设置里调）。
  */
 class ChatApi {
+
+    /** 一次请求最多带几张图：再多请求体就太大了 */
+    private val maxImagesPerRequest = 4
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -116,13 +123,14 @@ class ChatApi {
     suspend fun chatOnce(
         settings: AppSettings,
         history: List<ChatMessage>,
-        tools: List<ToolSpec>
+        tools: List<ToolSpec>,
+        imageLoader: ((String) -> String?)? = null
     ): Result<ChatResult> = withContext(Dispatchers.IO) {
         val retries = settings.retryCount.coerceIn(0, 4)
         var last: String? = null
         var attempt = 0
         while (true) {
-            val r = chatOnceAttempt(settings, history, tools, keyForAttempt(settings, attempt))
+            val r = chatOnceAttempt(settings, history, tools, keyForAttempt(settings, attempt), imageLoader)
             r.onSuccess { return@withContext Result.success(it) }
             val e = r.exceptionOrNull()
             last = e?.message ?: e?.javaClass?.simpleName
@@ -137,10 +145,11 @@ class ChatApi {
         settings: AppSettings,
         history: List<ChatMessage>,
         tools: List<ToolSpec>,
-        key: String
+        key: String,
+        imageLoader: ((String) -> String?)? = null
     ): Result<ChatResult> = withContext(Dispatchers.IO) {
         try {
-            val body = buildBody(settings, history, tools, stream = false)
+            val body = buildBody(settings, history, tools, stream = false, imageLoader = imageLoader)
             val request = buildRequest(settings, body, key)
             val call = client.newCall(request)
             activeCall = call
@@ -155,17 +164,9 @@ class ChatApi {
                 val content = if (msg == null || msg.isNull("content")) "" else msg.optString("content", "")
                 val calls = parseToolCalls(msg?.optJSONArray("tool_calls"))
                 val usage = json.optJSONObject("usage")
-                val fixed = if (content.isBlank() && calls.isEmpty()) {
-                    // 有些模型只把思考写进 reasoning_content，别当成空结果
-                    val think = msg?.optString("reasoning_content", "")?.takeIf { it.isNotBlank() }
-                        ?: msg?.optString("reasoning", "")
-                    if (think.isNullOrBlank()) content else think
-                } else {
-                    content
-                }
                 Result.success(
                     ChatResult(
-                        content = fixed,
+                        content = content,
                         toolCalls = calls,
                         promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
                         completionTokens = usage?.optInt("completion_tokens", 0) ?: 0
@@ -189,13 +190,14 @@ class ChatApi {
         settings: AppSettings,
         history: List<ChatMessage>,
         tools: List<ToolSpec>,
+        imageLoader: ((String) -> String?)? = null,
         onEvent: (ChatEvent) -> Unit
     ) = withContext(Dispatchers.IO) {
         val retries = settings.retryCount.coerceIn(0, 10)
         var lastError: AttemptError? = null
         var attempt = 0
         while (true) {
-            val err = streamOnce(settings, history, tools, keyForAttempt(settings, attempt), onEvent)
+            val err = streamOnce(settings, history, tools, keyForAttempt(settings, attempt), imageLoader, onEvent)
             if (err == null) return@withContext
             lastError = err
             if (attempt >= retries || !err.retryable) break
@@ -213,9 +215,10 @@ class ChatApi {
         history: List<ChatMessage>,
         tools: List<ToolSpec>,
         key: String,
+        imageLoader: ((String) -> String?)?,
         onEvent: (ChatEvent) -> Unit
     ): AttemptError? {
-        val body = buildBody(settings, history, tools, stream = true)
+        val body = buildBody(settings, history, tools, stream = true, imageLoader = imageLoader)
         val request = buildRequest(settings, body, key)
         val call = client.newCall(request)
         activeCall = call
@@ -347,17 +350,30 @@ class ChatApi {
 
     private fun readText(node: JSONObject, c: Chunk, onEvent: (ChatEvent) -> Unit) {
         if (!node.isNull("content")) {
-            val piece = node.optString("content", "")
+            val piece = when (val raw = node.opt("content")) {
+                null -> ""
+                is JSONArray -> buildString {
+                    for (i in 0 until raw.length()) {
+                        val part = raw.optJSONObject(i) ?: continue
+                        val t = part.optString("text", "")
+                        if (t.isNotEmpty()) append(t)
+                    }
+                }
+                else -> node.optString("content", "")
+            }
             if (piece.isNotEmpty()) {
                 c.text.append(piece)
                 onEvent(ChatEvent.Delta(piece))
             }
         }
-        // thinking 类模型：正文可能是空的，思考写在 reasoning_content / reasoning 里
-        for (k in listOf("reasoning_content", "reasoning")) {
+        // thinking 类模型：正文和思考是两条通道，思考只走 Reasoning 事件
+        for (k in listOf("reasoning_content", "reasoning", "thinking")) {
             if (!node.isNull(k)) {
                 val r = node.optString(k, "")
-                if (r.isNotEmpty()) c.reasoning.append(r)
+                if (r.isNotEmpty()) {
+                    c.reasoning.append(r)
+                    onEvent(ChatEvent.Reasoning(r))
+                }
             }
         }
     }
@@ -384,18 +400,13 @@ class ChatApi {
     }
 
     /**
-     * 收尾：处理「只回了思考」和「什么都没回」两种情况。
-     * 以前空白回复会静默结束（界面空白但额度已经扣了），现在当成可重试的错误。
+     * 收尾。
+     * v1.6.0 起：思考不再冒充正文。
+     * - 只有思考、没有正文也没有工具调用 → ReasoningOnly 事件，交给上层决定是重试还是如实告知；
+     * - 彻底空白（连思考都没有）→ 当成可重试的错误，以前这种会静默结束、白扣额度。
      */
     private fun finishChunk(c: Chunk, onEvent: (ChatEvent) -> Unit): AttemptError? {
         c.sawUsage?.let { (p, comp) -> onEvent(ChatEvent.Usage(p, comp)) }
-
-        if (c.text.isBlank() && c.reasoning.isNotBlank()) {
-            val think = c.reasoning.toString().trim()
-            val note = "（模型没有返回正文，下面是它的思考内容）\n$think"
-            c.text.append(note)
-            onEvent(ChatEvent.Delta(note))
-        }
 
         val calls = c.toolAcc.values.filter { it.name.isNotBlank() }.map {
             ToolCall(
@@ -407,6 +418,10 @@ class ChatApi {
         if (calls.isNotEmpty()) onEvent(ChatEvent.ToolCalls(calls))
 
         if (c.text.isBlank() && calls.isEmpty()) {
+            if (c.reasoning.isNotBlank()) {
+                onEvent(ChatEvent.ReasoningOnly)
+                return null
+            }
             return AttemptError("服务商返回了空内容：既没有正文，也没有工具调用", true)
         }
         return null
@@ -495,11 +510,12 @@ class ChatApi {
         settings: AppSettings,
         history: List<ChatMessage>,
         tools: List<ToolSpec>,
-        stream: Boolean
+        stream: Boolean,
+        imageLoader: ((String) -> String?)? = null
     ): String {
         val root = JSONObject()
         root.put("model", settings.model)
-        root.put("messages", buildMessages(settings, history))
+        root.put("messages", buildMessages(settings, history, imageLoader))
         if (stream) root.put("stream", true)
         root.put("temperature", settings.temperature.toDouble())
         if (settings.topP < 1.0f) root.put("top_p", settings.topP.toDouble())
@@ -513,13 +529,28 @@ class ChatApi {
         return root.toString()
     }
 
-    private fun buildMessages(settings: AppSettings, history: List<ChatMessage>): JSONArray {
+    private fun buildMessages(
+        settings: AppSettings,
+        history: List<ChatMessage>,
+        imageLoader: ((String) -> String?)? = null
+    ): JSONArray {
         var keep = history
         val limit = settings.contextLimit
         if (limit > 0 && keep.size > limit) {
             keep = keep.takeLast(limit)
             // 协议要求 tool 消息前面必须有对应的 assistant 调用，别让历史从孤立的 tool 开始
             while (keep.isNotEmpty() && keep.first().role == ROLE_TOOL) keep = keep.drop(1)
+        }
+        // 图片只带最近几条：请求体一大，网关先给你 413
+        val imageMsgIds = HashSet<String>()
+        if (settings.sendImages && imageLoader != null) {
+            var budget = maxImagesPerRequest
+            for (m in keep.asReversed()) {
+                if (m.images.isEmpty()) continue
+                if (budget <= 0) break
+                imageMsgIds.add(m.id)
+                budget -= m.images.size
+            }
         }
         val arr = JSONArray()
         if (settings.systemPrompt.isNotBlank()) {
@@ -577,10 +608,51 @@ class ChatApi {
                     )
                 }
 
-                else -> arr.put(JSONObject().put("role", m.role).put("content", m.content))
+                else -> arr.put(userMessage(settings, m, m.id in imageMsgIds, imageLoader))
             }
         }
         return arr
+    }
+
+    /**
+     * 用户消息：带图时按 OpenAI 多模态格式下发 content 数组，
+     * 图片由上层给的 imageLoader 转成 data URL（本地压缩后 base64）。
+     */
+    private fun userMessage(
+        settings: AppSettings,
+        m: ChatMessage,
+        allowImages: Boolean,
+        imageLoader: ((String) -> String?)? = null
+    ): JSONObject {
+        val o = JSONObject().put("role", m.role)
+        val urls = if (allowImages && imageLoader != null) {
+            m.images.mapNotNull { path ->
+                try {
+                    imageLoader(path)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        } else {
+            emptyList()
+        }
+        if (urls.isEmpty()) {
+            o.put("content", m.content)
+            return o
+        }
+        val content = JSONArray()
+        if (m.content.isNotBlank()) {
+            content.put(JSONObject().put("type", "text").put("text", m.content))
+        }
+        urls.forEach { u ->
+            content.put(
+                JSONObject()
+                    .put("type", "image_url")
+                    .put("image_url", JSONObject().put("url", u))
+            )
+        }
+        o.put("content", content)
+        return o
     }
 
     private fun parseToolCalls(arr: JSONArray?): List<ToolCall> {

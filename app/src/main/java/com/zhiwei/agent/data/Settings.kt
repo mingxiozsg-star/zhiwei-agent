@@ -12,17 +12,40 @@ const val COLLAPSE_SINGLE = "single"
 const val COLLAPSE_MULTI = "multi"
 
 /** 系统提示词版本：升级时只在用户没改过的情况下换成新版 */
-const val SYSTEM_PROMPT_VERSION = 3
+const val SYSTEM_PROMPT_VERSION = 4
 
 /**
- * v3 核心人设提示词（智能体设定）。
+ * v4 核心提示词。
  *
- * 分四层写：你是谁 / 怎么说话 / 怎么干活 / 输出格式。
- * 工具清单与角色卡由运行时动态追加，这里只写「不变的那部分」。
- * 参考了主流智能体（Claude Code / Manus / Cursor）的共同做法：
- * 先结论、能查就查、多步先列计划、工具报错不算任务结束、不可逆操作先确认。
+ * v3 的毛病：明文要求「先列 2~5 步计划、每步给一句进度」，等于授权模型表演，
+ * 于是用户问一句截图，它先讲一段计划。v4 直接反过来：先动手，话越少越好。
+ * 分层仍然是「你是谁 / 怎么说话 / 怎么干活 / 收尾」四层，只是把每条都压缩了。
  */
 const val DEFAULT_SYSTEM_PROMPT =
+    "你是知微，跑在用户手机里的 AI 智能体。你能调用工具去查、去算、去写，" +
+        "也能操作这台设备（音量、亮度、手电筒、震动、截图、开关应用、读工作区文件、在沙箱里跑命令）。\n" +
+        "\n" +
+        "【你是谁】\n" +
+        "- 名字「知微」，取「见微知著」。你住在这台手机里，用户的记忆库、知识库、工作区文件都是你的长期上下文。\n" +
+        "\n" +
+        "【怎么说话】\n" +
+        "1. 先给结论，再补必要信息，能一句说完就不写两句。不寒暄、不复述用户的话、不说「好问题」「让我看看」「作为一个 AI」。\n" +
+        "2. 不要预告、不要汇报过程、不要为自己的操作写说明文。工具调完只给结果；用户没问的细节不要主动铺开。\n" +
+        "3. 默认中文。代码放代码块并标语言；能列点就别写大段。\n" +
+        "4. 禁止把思考过程、内心独白、计划清单当正文输出。\n" +
+        "\n" +
+        "【怎么干活】\n" +
+        "1. 能自己查的绝不猜：时间、计算、设备状态、剪贴板、记忆与知识库、网页、工作区文件，先调工具拿真实结果。\n" +
+        "2. 该调工具就直接调，一次可以调多个，不要先问「要不要我帮你…」。多步任务直接往下做完，中间不要停下等用户催。\n" +
+        "3. 工具报错不代表任务结束：读懂错误、换参数或换方案重试；确实做不到，一句话说清卡在哪、需要用户做什么。\n" +
+        "4. 不编造事实、链接、数据、文件名、API；不确定就直说不确定。\n" +
+        "5. 删除、发送、支付、改系统设置这类不可逆或有副作用的操作，先一句话说清再执行。\n" +
+        "\n" +
+        "【收尾】\n" +
+        "做完给一句状态：成了什么、还差什么。没别的事就收住，不要追问、不要客套。"
+
+/** v3 的老提示词，只用于升级时判断用户有没有自己改过 */
+private const val LEGACY_SYSTEM_PROMPT_V3 =
     "你是知微，一个跑在用户手机里的 AI 智能体。你不是只会聊天的助手：你能调用工具去查、去算、去写，" +
         "也能操作这台设备（音量、亮度、手电筒、震动、开关应用、在沙箱里跑终端命令）。\n" +
         "\n" +
@@ -105,6 +128,12 @@ data class AppSettings(
     val autoResumeAfterFailure: Boolean = true,
     /** 每次请求最多带上的历史消息条数 */
     val contextLimit: Int = 24,
+    /** 图片附件按多模态（image_url）直传给模型，需要模型支持视觉 */
+    val sendImages: Boolean = true,
+    /** 图片发出去前压缩到的长边像素；太小看不清，太大浪费额度 */
+    val imageMaxSide: Int = 1568,
+    /** 把模型的思考过程单独折叠展示，不混进正文 */
+    val showReasoning: Boolean = true,
 
     // ---- 记忆与知识 ----
     val autoMemory: Boolean = true,
@@ -195,6 +224,9 @@ class SettingsStore(context: Context) {
         retryCount = sp.getInt("retryCount", 6),
         autoResumeAfterFailure = sp.getBoolean("autoResumeAfterFailure", true),
         contextLimit = sp.getInt("contextLimit", 24),
+        sendImages = sp.getBoolean("sendImages", true),
+        imageMaxSide = sp.getInt("imageMaxSide", 1568),
+        showReasoning = sp.getBoolean("showReasoning", true),
         autoMemory = sp.getBoolean("autoMemory", true),
         memoryTopK = sp.getInt("memoryTopK", 4),
         knowledgeTopK = sp.getInt("knowledgeTopK", 3),
@@ -223,6 +255,7 @@ class SettingsStore(context: Context) {
         if (version < SYSTEM_PROMPT_VERSION &&
             (saved == LEGACY_SYSTEM_PROMPT_V1 ||
                 saved == LEGACY_SYSTEM_PROMPT_V2 ||
+                saved == LEGACY_SYSTEM_PROMPT_V3 ||
                 saved == DEFAULT_SYSTEM_PROMPT)
         ) {
             return DEFAULT_SYSTEM_PROMPT
@@ -254,6 +287,9 @@ class SettingsStore(context: Context) {
             .putInt("retryCount", s.retryCount)
             .putBoolean("autoResumeAfterFailure", s.autoResumeAfterFailure)
             .putInt("contextLimit", s.contextLimit)
+            .putBoolean("sendImages", s.sendImages)
+            .putInt("imageMaxSide", s.imageMaxSide)
+            .putBoolean("showReasoning", s.showReasoning)
             .putBoolean("autoMemory", s.autoMemory)
             .putInt("memoryTopK", s.memoryTopK)
             .putInt("knowledgeTopK", s.knowledgeTopK)

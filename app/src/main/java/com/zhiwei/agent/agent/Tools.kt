@@ -29,6 +29,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -61,7 +62,9 @@ data class ToolSpec(
 data class ToolOutcome(
     val text: String,
     val newMemory: MemoryItem? = null,
-    val newKnowledge: KnowledgeItem? = null
+    val newKnowledge: KnowledgeItem? = null,
+    /** 工具产出的图片（例如截屏）：会被塞回对话，让模型直接看图 */
+    val images: List<String> = emptyList()
 )
 
 /** 工具运行环境：设置 + 三个本地库的快照 */
@@ -122,6 +125,10 @@ object ToolRegistry {
     const val TOOL_OPEN_APP = "open_app"
     const val TOOL_MEDIA = "media_control"
     const val TOOL_SPEAK = "speak_text"
+    const val TOOL_LIST_DIR = "list_dir"
+    const val TOOL_READ_FILE = "read_file"
+    const val TOOL_WRITE_FILE = "write_file"
+    const val TOOL_SCREENSHOT = "screenshot"
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -300,6 +307,37 @@ object ToolRegistry {
             )
         )
 
+        list += ToolSpec(
+            TOOL_LIST_DIR,
+            "列目录",
+            "列出工作区里某个目录下的文件与子目录。path 留空就是工作区根目录。",
+            schema("path" to str("可选，目录路径；留空为工作区根目录")),
+            free = true
+        )
+        list += ToolSpec(
+            TOOL_READ_FILE,
+            "读文件",
+            "读取工作区里某个文件的内容。文本文件直接返回正文；图片会告知路径（想让模型直接看图，请让用户把图片作为附件发到对话里）。大文件只返回前一部分。",
+            schema("path" to str("文件路径"), required = listOf("path")),
+            free = true
+        )
+        list += ToolSpec(
+            TOOL_WRITE_FILE,
+            "写文件",
+            "把一段文本写进工作区的文件（覆盖写入），目录不存在会自动创建。",
+            schema(
+                "path" to str("文件路径"),
+                "content" to str("要写入的文本"),
+                required = listOf("path", "content")
+            )
+        )
+        list += ToolSpec(
+            TOOL_SCREENSHOT,
+            "截屏",
+            "截取当前手机屏幕，截好的图会直接带回对话，模型能看图作答。第一次用需要用户在系统弹窗里授权一次（应用内会弹出）。",
+            schema()
+        )
+
         if (settings.tavilyApiKey.isNotBlank()) {
             list += ToolSpec(
                 TOOL_SEARCH,
@@ -356,6 +394,10 @@ object ToolRegistry {
         TOOL_OPEN_APP -> "打开应用"
         TOOL_MEDIA -> "媒体控制"
         TOOL_SPEAK -> "朗读"
+        TOOL_LIST_DIR -> "列目录"
+        TOOL_READ_FILE -> "读文件"
+        TOOL_WRITE_FILE -> "写文件"
+        TOOL_SCREENSHOT -> "截屏"
         else -> env.pluginList.firstOrNull { it.safeName() == name }?.name ?: name
     }
 
@@ -395,6 +437,12 @@ object ToolRegistry {
                     TOOL_OPEN_APP -> ToolOutcome(openApp(env.context, args.optString("target", "")))
                     TOOL_MEDIA -> ToolOutcome(mediaControl(env.context, args.optString("action", "")))
                     TOOL_SPEAK -> ToolOutcome(speak(env.context, args.optString("text", "")))
+                    TOOL_LIST_DIR -> ToolOutcome(listDir(env.context, args.optString("path", "")))
+                    TOOL_READ_FILE -> ToolOutcome(readFile(env.context, args.optString("path", "")))
+                    TOOL_WRITE_FILE -> ToolOutcome(
+                        writeFile(env.context, args.optString("path", ""), args.optString("content", ""))
+                    )
+                    TOOL_SCREENSHOT -> screenshot(env.context)
                     else -> ToolOutcome("未知工具：$name")
                 }
             } catch (e: Exception) {
@@ -643,6 +691,103 @@ object ToolRegistry {
             if (body.isNotEmpty()) append(body) else append("（无输出）")
             append("\n[退出码 ").append(result.exitCode).append(']')
         }
+    }
+
+    // ---------- 工作区文件 ----------
+
+    /** 模型给的路径：相对路径按工作区解析，绝对路径原样 */
+    private fun resolveInWorkspace(context: Context, path: String): File {
+        val home = ShellRunner.homeDir(context.filesDir)
+        val p = path.trim().ifBlank { "." }
+        val f = File(p)
+        return if (f.isAbsolute) f else File(home, p)
+    }
+
+    private fun listDir(context: Context, path: String): String {
+        val dir = resolveInWorkspace(context, path)
+        if (!dir.exists()) return "目录不存在：${dir.absolutePath}"
+        if (!dir.isDirectory) return "这不是目录：${dir.absolutePath}（用 read_file 读文件）"
+        val home = ShellRunner.homeDir(context.filesDir).absolutePath
+        val items = dir.listFiles()
+            ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+            ?: emptyList()
+        if (items.isEmpty()) return "目录是空的：${dir.absolutePath}"
+        return buildString {
+            append("目录 ").append(dir.absolutePath.replace(home, "工作区"))
+                .append("，共 ").append(items.size).append(" 项：\n")
+            items.take(200).forEach { f ->
+                append(if (f.isDirectory) "[目录] " else "[文件] ").append(f.name)
+                if (!f.isDirectory) append("  ").append(humanSize(f.length()))
+                append('\n')
+            }
+            if (items.size > 200) append("…（还有 ").append(items.size - 200).append(" 项未列出）")
+        }.trim()
+    }
+
+    private fun readFile(context: Context, path: String): String {
+        if (path.isBlank()) return "没有提供文件路径"
+        val f = resolveInWorkspace(context, path)
+        if (!f.exists()) return "文件不存在：${f.absolutePath}"
+        if (f.isDirectory) return "这是目录：${f.absolutePath}（用 list_dir 列目录）"
+        if (!f.canRead()) return "没有权限读取：${f.absolutePath}"
+        if (ImageSupport.isImage(f.name)) {
+            return "这是图片：${f.name}（${humanSize(f.length())}）。图片没法按文本读；" +
+                "想让模型直接看图，请让用户把这张图作为附件发到对话里，模型就能以多模态方式直接看到。"
+        }
+        return try {
+            val sb = StringBuilder()
+            f.bufferedReader().use { r ->
+                val buf = CharArray(4096)
+                while (sb.length < 12000) {
+                    val n = r.read(buf)
+                    if (n < 0) break
+                    sb.append(buf, 0, n)
+                }
+            }
+            val text = sb.toString()
+            when {
+                text.contains('\u0000') -> "这是二进制文件（${humanSize(f.length())}），没法当文本读。"
+                f.length() > 12000L -> text.take(12000) + "\n…（内容较长已截断，共 ${f.length()} 字节）"
+                else -> text
+            }
+        } catch (e: Exception) {
+            "读取失败：${e.message}"
+        }
+    }
+
+    private fun writeFile(context: Context, path: String, content: String): String {
+        if (path.isBlank()) return "没有提供文件路径"
+        val f = resolveInWorkspace(context, path)
+        return try {
+            f.parentFile?.mkdirs()
+            f.writeText(content)
+            "已写入 ${f.absolutePath}（${content.length} 字）"
+        } catch (e: Exception) {
+            "写入失败：${e.message}"
+        }
+    }
+
+    private fun humanSize(bytes: Long): String = when {
+        bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+        bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
+    // ---------- 截屏 ----------
+
+    private fun screenshot(context: Context): ToolOutcome {
+        if (!ScreenCapture.isGranted()) {
+            ScreenCapture.requestPermission(context)
+            return ToolOutcome(
+                "已弹出系统截屏授权窗口，请让用户在弹窗里点一下「立即开始」（只需要一次）。" +
+                    "授权好之后，再调一次 screenshot 就能拿到截图。"
+            )
+        }
+        val since = System.currentTimeMillis()
+        ScreenCapture.startCapture(context)
+        val path = ScreenCapture.awaitShot(since, 8000)
+            ?: return ToolOutcome("截屏超时或失败。可能是授权被系统回收，再试一次即可。")
+        return ToolOutcome(text = "已截屏：$path（图已附在下一轮对话里，直接看图作答）", images = listOf(path))
     }
 
     // ---------- 设备操控 ----------

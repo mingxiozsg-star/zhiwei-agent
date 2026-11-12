@@ -336,7 +336,7 @@ fun PersonaSettingsPage(vm: ChatViewModel, onNavigate: (AppScreen) -> Unit) {
             SetDivider()
             SetAction(
                 title = "恢复内置提示词",
-                subtitle = "只有你自己改过才会被覆盖，恢复后是 v3 版本",
+                subtitle = "只有你自己改过才会被覆盖，恢复后是 v4 版本",
                 label = "恢复"
             ) { vm.updateSettings { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) } }
             SetDivider()
@@ -409,8 +409,28 @@ fun PersonaSettingsPage(vm: ChatViewModel, onNavigate: (AppScreen) -> Unit) {
             ) { vm.resetPrompts() }
         }
 
-        SetSection("路线图") {
-            SetSoon("思考过程折叠开关", "现在只折叠工具调用；模型思维链要等接口侧暴露")
+        SetSection("多模态与思考过程") {
+            SetSwitch(
+                title = "把附件图片直接发给模型",
+                subtitle = "图片压缩后随对话一起发，模型能直接看图；关掉就只给文件路径",
+                checked = settings.sendImages
+            ) { v -> vm.updateSettings { it.copy(sendImages = v) } }
+            SetDivider()
+            SetStepper(
+                title = "图片压缩长边",
+                subtitle = "越大越清晰也越贵，1568 适合大多数模型",
+                value = settings.imageMaxSide,
+                min = 512,
+                max = 2048,
+                step = 256,
+                suffix = " px"
+            ) { v -> vm.updateSettings { it.copy(imageMaxSide = v) } }
+            SetDivider()
+            SetSwitch(
+                title = "显示模型思考过程",
+                subtitle = "思维链折在气泡里，点一下才展开，绝不混进正文",
+                checked = settings.showReasoning
+            ) { v -> vm.updateSettings { it.copy(showReasoning = v) } }
         }
     }
 }
@@ -491,6 +511,8 @@ fun ToolsSettingsPage(vm: ChatViewModel) {
 
         SetSection("工具清单") {
             SetInfo(title = "读文件 / 写文件 / 列目录", value = "已上线")
+            SetDivider()
+            SetInfo(title = "截屏", value = "已上线（首次用需授权一次）")
             SetDivider()
             SetInfo(title = "终端命令（沙箱）", value = if (settings.enableShellTool) "已开启" else "已关闭")
             SetDivider()

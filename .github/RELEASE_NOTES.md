@@ -1,73 +1,85 @@
 ## 中文
 
-这次更新主要是把「知微长什么样、怎么说话」交回你手里，顺带把设置页重新排了一遍。
+这次修的全是你亲口报的毛病：发了图片它说「等你授权」、不给正文只把思考过程倒出来、让它截几张图它先讲一大段计划。
 
-**角色卡：现在你可以直接给知微捏人设**
+**图片，现在真的能看了**
 
-打开抽屉底部的「角色卡」，名字、头像、一句话身份、性格与说话风格、额外要求、开场白都能改。改完立刻生效，不用重启。
+以前附件只是复制进工作区、给一个路径，模型根本没看到图，只能反过来问你「要不要我读」。现在图片会先压到长边 1568、转成多模态格式随对话发出去。
 
-> 你说：你叫阿岚，说话别这么客气，直接点，必要时怼我。
-> 知微照做：之后每次开口都按这条角色卡来，不再自我介绍成别的名字。
+> 你说：[发一张截图] 帮我看看这里哪儿报错。
+> 知微直接看图回答，不再跟你要授权。
 
-角色卡还能导出成 JSON 复制走，换手机或者分享给别人时粘贴回来即可；不满意随时一键恢复默认。
+> 你说：工作区里那个 config.json 对不对？
+> 知微自己用「读文件」把内容读完再答，不用你手动贴。
 
-**设置页重排：十三个分类，点进去才是开关**
+**思考过程不再冒充正文**
 
-首页不再把所有选项摊开。现在一行一个分类——模型与 API、智能体人设、技能 Skills、工具与权限、使用统计、主题与字体、对话管理、工作区管理、联动扩展、网络与安全、通知、快捷键与手势、关于与赞助。每行是「标题 + 图标 + 一行小字简介」，点进去才是具体开关，返回键回到分类列表。
+模型吐出的思维链（reasoning / thinking）单独走一条通道，折叠在气泡里，点一下才展开。万一它只给了思考、正文一个字没有，会自动再要一次，而不是把思考全甩给你。
 
-还没做的功能（多模型分流、SKILL.md 技能包、热力图、代理与 SSL、浏览器联动等）统一标了「开发中」，不装作能用。
+**废话变少了**
 
-**终端和工作区不再跳页**
+系统提示词升到 v4：能一句说清就不写两句，不许预告、不许复述、不许汇报过程。
 
-聊天页顶栏放上终端和工作区两个图标，点一下直接盖在对话上面，再点一下收起。写完命令、看完文件，回到对话时输入框里的字还在。
+> 你说：截三张图给我。
+> 以前的知微：先列一条 3~5 步计划，每步再配一句进度说明……
+> 现在的知微：直接调「截屏」，把图带回来，答一句结果。
 
-**聊天里可以直接甩文件给知微**
+**新增四个工具**
 
-输入栏的 ＋ 改成上传附件：选中的文件会复制进工作区 `uploads/`，以标签形式挂在输入框上方，模型能直接读，发完自动清空。
+- 读文件 / 写文件 / 列目录：工作区里的文件模型能自己读写
+- 截屏：首次用系统会弹一次授权，之后随时能截；截好的图直接回到对话里，模型看着图回答
 
-**其它**
+**设置里多了三项**
 
-- 提示词库（快捷短语）移到右上角 ⋮ →「快捷短语」，支持 `{time}` / `{model}` 变量
-- 系统提示词升级到 v3，做事方式写得更细；你自己改过的提示词不会被覆盖
-- 流式输出改成真正的逐行读取，长回复不再等到最后才出现
+模型与 API →「多模态与思考过程」：图片直传开关、图片压缩长边、思考过程显示开关。
+
+**下载**
+
+- GitHub：https://github.com/mingxiozsg-star/zhiwei-agent/releases
+- 加速：https://ghfast.top/https://github.com/mingxiozsg-star/zhiwei-agent/releases
+
+官方 QQ 群：1131325287
 
 ---
 
 ## English
 
-This release hands the agent's identity back to you, and tidies up the settings page while we're at it.
+Every fix here came straight from what you reported: sending a picture and being told "waiting for your permission", getting a thinking chain instead of an answer, and asking for a few screenshots only to be handed a long plan first.
 
-**Persona card: shape who Zhiwei is**
+**Images are actually visible now**
 
-Open **Persona card** from the drawer. Name, avatar, one-line identity, personality, extra instructions and greeting are all editable — saved the moment you type, no restart.
+Attachments used to be copied into the workspace and handed over as a bare path, so the model never saw the picture and asked you to authorise a read. Images are now downscaled to 1568 on the long edge and sent with the conversation as proper multimodal content.
 
-> You say: Your name is Lan. Drop the politeness, be blunt, push back when I'm wrong.
-> Zhiwei complies: every reply follows that card, and it never introduces itself under another name.
+> You: [sends a screenshot] what's failing here?
+> Zhiwei: reads the picture and answers — no permission ping-pong.
 
-Export the card as JSON to move it to another phone or share it; paste it back to import. One tap restores the defaults.
+> You: is `config.json` in the workspace correct?
+> Zhiwei: opens it with **read file** itself and answers, no copy-pasting required.
 
-**Settings rebuilt: thirteen groups, switches one level down**
+**Reasoning no longer poses as the answer**
 
-The main list no longer dumps every option on you. Each row is one group — Model & API, Persona, Skills, Tools & permissions, Usage, Theme & fonts, Conversations, Workspace, Integrations, Network & security, Notifications, Shortcuts & gestures, About & support. A row reads "title + icon + one line", and the actual switches live one level down, with Back returning to the group list.
+The model's thinking chain (reasoning / thinking) travels on its own channel and stays folded in the bubble, one tap to expand. If it returns reasoning and no answer at all, the agent asks once more for the answer instead of dumping the thinking on you.
 
-Everything not built yet (multi-model routing, SKILL.md packs, heatmap, proxy & SSL, browser integration, …) is labelled **in progress** instead of being faked.
+**Far less filler**
 
-**Terminal and workspace no longer jump pages**
+The system prompt is now v4: if one sentence does it, don't write two — no pre-announcing, no restating, no narrating the process.
 
-Two icons in the chat top bar lay the terminal and the workspace over the conversation; tap again to dismiss. Anything you typed in the input box is still there when you come back.
+> You: take three screenshots.
+> Before: a 3–5 step plan, each step with a progress note…
+> Now: calls **screenshot**, brings the images back, answers with the result.
 
-**Hand files straight to Zhiwei**
+**Four new tools**
 
-＋ in the input bar now uploads attachments: picked files are copied into the workspace `uploads/` and shown as chips above the input. The model reads them directly; they clear after sending.
+- read file / write file / list directory — the model can handle workspace files on its own
+- screenshot — one system grant the first time, then instant; the capture goes straight back into the conversation so the model answers from the picture
 
-**Also**
+**Three new settings**
 
-- The prompt library moved to ⋮ → **Quick phrases**, still supporting `{time}` / `{model}`
-- System prompt upgraded to v3 with a more detailed way of working; prompts you edited yourself are never overwritten
-- Streaming now reads line by line, so long replies no longer appear all at once at the end
+Model & API → "Multimodal & reasoning": send images inline, image long-edge size, show reasoning.
 
----
+**Download**
 
-下载 / Download：[Releases](https://github.com/mingxiozsg-star/zhiwei-agent/releases)
+- GitHub: https://github.com/mingxiozsg-star/zhiwei-agent/releases
+- Mirror: https://ghfast.top/https://github.com/mingxiozsg-star/zhiwei-agent/releases
 
-官方 QQ 群 / Official QQ group：**1131325287**
+Official QQ group: 1131325287

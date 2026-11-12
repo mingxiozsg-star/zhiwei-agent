@@ -339,7 +339,8 @@ fun ChatScreen(
                             onDelete = { vm.deleteMessage(m.id) },
                             onRegenerate = if (m.role == ROLE_ASSISTANT) ({ vm.regenerate() }) else null,
                             showTimestamp = settings.showTimestamp,
-                            collapseMode = settings.collapseMode
+                            collapseMode = settings.collapseMode,
+                            showReasoning = settings.showReasoning
                         )
                     }
                 }
