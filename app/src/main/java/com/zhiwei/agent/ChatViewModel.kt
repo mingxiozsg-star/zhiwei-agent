@@ -1526,12 +1526,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         downloadJob?.cancel()
         val job = viewModelScope.launch {
-            _download.value = DownloadState.Running(-1, 0, 0, _settings.value.mirrorFirst)
+            var lastMirror = _settings.value.mirrorFirst
+            _download.value = DownloadState.Running(-1, 0, 0, lastMirror)
             try {
                 val file = UpdateInstaller.download(app, info, _settings.value.mirrorFirst) { pct, got, total, mirror ->
+                    lastMirror = mirror
                     _download.value = DownloadState.Running(pct, got, total, mirror)
                 }
-                _download.value = DownloadState.Done(file, mirror)
+                _download.value = DownloadState.Done(file, lastMirror)
                 _notice.value = "下载完成：${file.name}"
             } catch (e: Exception) {
                 _download.value = DownloadState.Failed(e.message ?: "下载失败")

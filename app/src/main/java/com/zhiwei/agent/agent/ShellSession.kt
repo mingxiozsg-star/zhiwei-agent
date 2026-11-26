@@ -166,6 +166,9 @@ class ShellSession(private val home: File) {
                 } catch (_: InterruptedException) {
                 }
             }
+            // 编译器要求的兜底返回，走不到这里
+            @Suppress("UNREACHABLE_CODE")
+            return TermResult("", cwdPath, -1, true)
         }
 
     private fun clip(text: String): String {
