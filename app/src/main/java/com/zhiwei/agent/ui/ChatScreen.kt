@@ -29,11 +29,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -103,6 +106,7 @@ fun ChatScreen(
     var input by rememberSaveable { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     var promptMenuOpen by remember { mutableStateOf(false) }
+    var modelMenuOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
 
@@ -146,14 +150,99 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.titleMedium
                         )
-                        Text(
-                            text = settings.model.ifBlank { "未设置模型" } +
-                                " · 记忆 ${memories.size} · 知识 ${knowledge.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Box {
+                            Text(
+                                text = settings.model.ifBlank { "未设置模型" } +
+                                    " · 记忆 ${memories.size} · 知识 ${knowledge.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable { modelMenuOpen = true }
+                            )
+                            DropdownMenu(
+                                expanded = modelMenuOpen,
+                                onDismissRequest = { modelMenuOpen = false }
+                            ) {
+                                val favs = settings.favoriteModels()
+                                val all = vm.models.value
+                                val current = settings.model
+
+                                // 收藏过的置顶，一眼就看到
+                                favs.forEach { name ->
+                                    ModelMenuItem(
+                                        name = name,
+                                        current = name == current,
+                                        favorite = true,
+                                        onClick = {
+                                            modelMenuOpen = false
+                                            vm.setModel(name)
+                                        }
+                                    )
+                                }
+                                if (all.isNotEmpty()) {
+                                    if (favs.isNotEmpty()) HorizontalDivider()
+                                    all.forEach { name ->
+                                        ModelMenuItem(
+                                            name = name,
+                                            current = name == current,
+                                            favorite = name in favs,
+                                            onClick = {
+                                                modelMenuOpen = false
+                                                vm.setModel(name)
+                                            }
+                                        )
+                                    }
+                                } else if (favs.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text("模型列表还是空的，先在设置里填一个") },
+                                        enabled = false,
+                                        onClick = {}
+                                    )
+                                }
+
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (vm.modelsLoading.value) "正在拉取模型列表…"
+                                            else "刷新模型列表",
+                                            maxLines = 1
+                                        )
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                                    onClick = {
+                                        modelMenuOpen = false
+                                        vm.refreshModels()
+                                    }
+                                )
+                                // 收藏/取消收藏当前这个模型，不用进设置翻
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (favs.contains(current)) "取消收藏 ${current}"
+                                            else "收藏当前模型",
+                                            maxLines = 1
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Star,
+                                            contentDescription = null,
+                                            tint = if (favs.contains(current)) {
+                                                MaterialTheme.colorScheme.tertiary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        modelMenuOpen = false
+                                        if (favs.contains(current)) vm.toggleFavoriteModel(current)
+                                    }
+                                )
+                            }
+                        }
                     }
                 },
                 navigationIcon = {
@@ -525,4 +614,40 @@ private fun AttachmentChip(name: String, onRemove: () -> Unit) {
             )
         }
     }
+}
+
+/** 模型列表里的一行：当前正在用的打个勾，收藏过的星星点亮 */
+@Composable
+private fun ModelMenuItem(
+    name: String,
+    current: Boolean,
+    favorite: Boolean,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = name,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        leadingIcon = {
+            Icon(
+                Icons.Default.Star,
+                contentDescription = null,
+                tint = if (favorite) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        },
+        trailingIcon = if (current) {
+            { Icon(Icons.Default.Check, contentDescription = "当前正在用") }
+        } else {
+            null
+        },
+        onClick = onClick
+    )
 }

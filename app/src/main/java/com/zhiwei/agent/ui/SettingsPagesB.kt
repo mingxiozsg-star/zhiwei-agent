@@ -7,14 +7,20 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -35,8 +42,10 @@ import com.zhiwei.agent.data.COLLAPSE_SINGLE
 import com.zhiwei.agent.data.THEME_DARK
 import com.zhiwei.agent.data.THEME_LIGHT
 import com.zhiwei.agent.data.THEME_SYSTEM
+import com.zhiwei.agent.net.DownloadState
 import com.zhiwei.agent.net.REPO_URL
 import com.zhiwei.agent.net.UpdateState
+import com.zhiwei.agent.readableSize
 import java.util.Locale
 
 // ---------------- ⑥ 主题与字体 ----------------
@@ -376,11 +385,66 @@ fun GestureSettingsPage(vm: ChatViewModel) {
 @Composable
 fun AboutSettingsPage(vm: ChatViewModel) {
     val update by vm.update.collectAsState()
+    val download by vm.download.collectAsState()
+    val settings by vm.settings.collectAsState()
     val context = LocalContext.current
 
     SetPage {
+        // 品牌头：一眼看清这是谁、什么版本
+        Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.size(46.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "知",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "知微智能体",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        text = "v${vm.appVersionName()} · 本地运行，数据只存本机",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
+
         SetSection("版本") {
-            SetInfo(title = "当前版本", value = vm.appVersionName())
+            SetInfo(
+                title = "当前版本",
+                value = vm.appVersionName(),
+                subtitle = "点一下「检查更新」看看有没有新版"
+            )
+            SetDivider()
+            SetSwitch(
+                title = "下载优先走加速镜像",
+                subtitle = "直连经常断，镜像断了会自动换一条接着下",
+                checked = settings.mirrorFirst
+            ) { v -> vm.updateSettings { it.copy(mirrorFirst = v) } }
             SetDivider()
             SetAction(
                 title = "检查更新",
@@ -399,8 +463,55 @@ fun AboutSettingsPage(vm: ChatViewModel) {
                     SetInfo(title = "发现新版本", value = u.info.tag, subtitle = u.info.publishedAt)
                     SetDivider()
                     SetAction(
-                        title = "打开下载页",
-                        subtitle = "跳到 Release 页面自己挑线路下载",
+                        title = "内置更新",
+                        subtitle = "直接把 ${u.info.tag} 的安装包下到本机，下完点一下就装",
+                        label = "下载",
+                        enabled = download !is DownloadState.Running
+                    ) { vm.downloadUpdate() }
+
+                    when (val d = download) {
+                        is DownloadState.Idle -> Unit
+
+                        is DownloadState.Running -> {
+                            SetDivider()
+                            LinearProgressIndicator(
+                                progress = {
+                                    if (d.percent >= 0) (d.percent / 100f).coerceIn(0f, 1f) else 0f
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(5.dp))
+                            Text(
+                                text = if (d.percent >= 0) {
+                                    "${d.percent}% · ${readableSize(d.received)}" +
+                                        if (d.total > 0) " / ${readableSize(d.total)}" else ""
+                                } else {
+                                    "已下 ${readableSize(d.received)}，还在拉…"
+                                } + if (d.viaMirror) "（走加速镜像）" else "（官方直链）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(onClick = { vm.cancelDownloadUpdate() }) { Text("取消") }
+                        }
+
+                        is DownloadState.Done -> SetAction(
+                            title = "安装更新",
+                            subtitle = "${d.file.name} · ${readableSize(d.file.length())}" +
+                                if (d.viaMirror) " · 走加速镜像" else " · 官方直链",
+                            label = "安装"
+                        ) { vm.installUpdate() }
+
+                        is DownloadState.Failed -> {
+                            SetDivider()
+                            SetInfo(title = "下载失败", value = d.message)
+                            TextButton(onClick = { vm.downloadUpdate() }) { Text("换个线路重试") }
+                        }
+                    }
+
+                    SetDivider()
+                    SetAction(
+                        title = "自己去下载",
+                        subtitle = "想看完整更新说明，或者自己挑线路下",
                         label = "打开"
                     ) { openUrl(context, u.info.pageUrl) }
                     if (u.info.notes.isNotBlank()) {

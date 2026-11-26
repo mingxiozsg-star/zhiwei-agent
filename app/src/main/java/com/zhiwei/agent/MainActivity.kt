@@ -102,7 +102,7 @@ fun ZhiweiApp(vm: ChatViewModel) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.4.0"
+        }.getOrNull() ?: "1.6.0"
     }
 
     val view = LocalView.current
@@ -292,6 +292,20 @@ fun ZhiweiApp(vm: ChatViewModel) {
                         onNavigate = {
                             overlayName = null
                             screenName = it.name
+                            drawerOpen = false
+                        },
+                        onOpenTerminal = {
+                            screenName = AppScreen.CHAT.name
+                            overlayName =
+                                if (overlayName == AppScreen.TERMINAL.name) null
+                                else AppScreen.TERMINAL.name
+                            drawerOpen = false
+                        },
+                        onOpenWorkspace = {
+                            screenName = AppScreen.CHAT.name
+                            overlayName =
+                                if (overlayName == AppScreen.WORKSPACE.name) null
+                                else AppScreen.WORKSPACE.name
                             drawerOpen = false
                         }
                     )

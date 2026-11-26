@@ -34,6 +34,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -70,7 +71,9 @@ fun ConversationDrawer(
     onNew: () -> Unit,
     onRename: (Conversation) -> Unit,
     onDelete: (String) -> Unit,
-    onNavigate: (AppScreen) -> Unit
+    onNavigate: (AppScreen) -> Unit,
+    onOpenTerminal: () -> Unit = {},
+    onOpenWorkspace: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -116,13 +119,55 @@ fun ConversationDrawer(
         Spacer(Modifier.height(8.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(6.dp))
+                // 快捷键：常用操作一键直达，不用翻菜单
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            DrawerQuickButton(
+                icon = Icons.Default.Add,
+                label = "新对话",
+                selected = false,
+                modifier = Modifier.weight(1f),
+                onClick = onNew
+            )
+            DrawerQuickButton(
+                icon = Icons.Default.Build,
+                label = "终端",
+                selected = false,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenTerminal
+            )
+            DrawerQuickButton(
+                icon = Icons.Default.Home,
+                label = "工作区",
+                selected = false,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenWorkspace
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // 搜会话：聊得多了就靠它找，不用一路翻
+        var kw by remember { mutableStateOf("") }
+        OutlinedTextField(
+            value = kw,
+            onValueChange = { kw = it },
+            placeholder = { Text("搜会话…") },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(Modifier.height(6.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "会话 · ${conversations.size}",
+                text = "会话 · ${filteredConversations(conversations, kw).size}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 6.dp)
@@ -138,7 +183,7 @@ fun ConversationDrawer(
         }
 
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(conversations, key = { it.id }) { conv ->
+            items(filteredConversations(conversations, kw), key = { it.id }) { conv ->
                 ConversationRow(
                     conversation = conv,
                     selected = conv.id == currentId,
@@ -373,4 +418,14 @@ private fun previewOf(conversation: Conversation): String {
     }
     val text = last.content.replace('\n', ' ').trim()
     return who + if (text.length > 20) text.take(20) + "…" else text
+}
+
+/** 会话搜索：标题命中最优先，其次看最后一条消息 */
+private fun filteredConversations(all: List<Conversation>, keyword: String): List<Conversation> {
+    val k = keyword.trim().lowercase()
+    if (k.isEmpty()) return all
+    return all.filter { conv ->
+        conv.title.lowercase().contains(k) ||
+            conv.messages.lastOrNull()?.content?.lowercase()?.contains(k) == true
+    }
 }

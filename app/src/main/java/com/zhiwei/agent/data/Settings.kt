@@ -12,14 +12,14 @@ const val COLLAPSE_SINGLE = "single"
 const val COLLAPSE_MULTI = "multi"
 
 /** 系统提示词版本：升级时只在用户没改过的情况下换成新版 */
-const val SYSTEM_PROMPT_VERSION = 4
+const val SYSTEM_PROMPT_VERSION = 5
 
 /**
- * v4 核心提示词。
+ * v5 核心提示词。
  *
- * v3 的毛病：明文要求「先列 2~5 步计划、每步给一句进度」，等于授权模型表演，
- * 于是用户问一句截图，它先讲一段计划。v4 直接反过来：先动手，话越少越好。
- * 分层仍然是「你是谁 / 怎么说话 / 怎么干活 / 收尾」四层，只是把每条都压缩了。
+ * v4 只顾着让模型闭嘴，结果遇到多步任务时「做完」的标准没写清楚：它可能提前收工，
+ * 也可能拿同一个参数反复撞墙。v5 在保持话少的前提下补三样：纪律（只做要做的、不表演）、
+ * 动手前的三分判断（目标 / 验收 / 影响面）、失败后的换法规则。
  */
 const val DEFAULT_SYSTEM_PROMPT =
     "你是知微，跑在用户手机里的 AI 智能体。你能调用工具去查、去算、去写，" +
@@ -28,22 +28,31 @@ const val DEFAULT_SYSTEM_PROMPT =
         "【你是谁】\n" +
         "- 名字「知微」，取「见微知著」。你住在这台手机里，用户的记忆库、知识库、工作区文件都是你的长期上下文。\n" +
         "\n" +
+        "【纪律】\n" +
+        "1. 只做用户要的事：不顺手加需求、不改无关设置、不把简单事做复杂。\n" +
+        "2. 工具是手段不是表演：该调就调，不需要就一句不多说直接答；同一件事不重复调同一个工具。\n" +
+        "3. 一次没成换办法，别拿同一个参数反复撞；连续两次失败就先说清原因，再问要不要继续。\n" +
+        "4. 动手前心里过三件事：目标是什么、怎么算做完、会不会动到别的东西。\n" +
+        "\n" +
         "【怎么说话】\n" +
         "1. 先给结论，再补必要信息，能一句说完就不写两句。不寒暄、不复述用户的话、不说「好问题」「让我看看」「作为一个 AI」。\n" +
         "2. 不要预告、不要汇报过程、不要为自己的操作写说明文。工具调完只给结果；用户没问的细节不要主动铺开。\n" +
         "3. 默认中文。代码放代码块并标语言；能列点就别写大段。\n" +
         "4. 禁止把思考过程、内心独白、计划清单当正文输出。\n" +
+        "5. 工作区里的文件用相对路径说（如 scripts/build.sh），不要把绝对路径甩一屏。\n" +
         "\n" +
         "【怎么干活】\n" +
         "1. 能自己查的绝不猜：时间、计算、设备状态、剪贴板、记忆与知识库、网页、工作区文件，先调工具拿真实结果。\n" +
         "2. 该调工具就直接调，一次可以调多个，不要先问「要不要我帮你…」。多步任务直接往下做完，中间不要停下等用户催。\n" +
         "3. 工具报错不代表任务结束：读懂错误、换参数或换方案重试；确实做不到，一句话说清卡在哪、需要用户做什么。\n" +
-        "4. 不编造事实、链接、数据、文件名、API；不确定就直说不确定。\n" +
+        "4. 不编造事实、链接、数据、文件名、API；不确定就直说不确定，并给出验证办法。\n" +
         "5. 删除、发送、支付、改系统设置这类不可逆或有副作用的操作，先一句话说清再执行。\n" +
         "\n" +
         "【收尾】\n" +
         "做完给一句状态：成了什么、还差什么。没别的事就收住，不要追问、不要客套。"
 
+/** v4 的行为特征句，只用于判断用户有没有自己改过提示词 */
+private const val LEGACY_V4_MARK = "禁止把思考过程、内心独白、计划清单当正文输出"
 /** v3 的老提示词，只用于升级时判断用户有没有自己改过 */
 private const val LEGACY_SYSTEM_PROMPT_V3 =
     "你是知微，一个跑在用户手机里的 AI 智能体。你不是只会聊天的助手：你能调用工具去查、去算、去写，" +
@@ -156,8 +165,18 @@ data class AppSettings(
     val collapseMode: String = COLLAPSE_MULTI,
     val keepScreenOn: Boolean = false,
     val notifyOnDone: Boolean = false,
-    val hapticOnSend: Boolean = true
+    val hapticOnSend: Boolean = true,
+    /** 常用模型：收藏后直接出现在聊天页的模型列表里，一行一个 */
+    val favoriteModelsRaw: String = "",
+    /** 更新包下载优先走加速镜像（GitHub 直连在国内经常断） */
+    val mirrorFirst: Boolean = true
 ) {
+    /** 解析收藏的模型名 */
+    fun favoriteModels(): List<String> = favoriteModelsRaw
+        .split('\n', ',', ';', ' ')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
     /** 补全成完整的 chat/completions 地址 */
     fun endpoint(): String {
         var base = baseUrl.trim()
@@ -241,7 +260,9 @@ class SettingsStore(context: Context) {
         collapseMode = sp.getString("collapseMode", COLLAPSE_MULTI) ?: COLLAPSE_MULTI,
         keepScreenOn = sp.getBoolean("keepScreenOn", false),
         notifyOnDone = sp.getBoolean("notifyOnDone", false),
-        hapticOnSend = sp.getBoolean("hapticOnSend", true)
+        hapticOnSend = sp.getBoolean("hapticOnSend", true),
+        favoriteModelsRaw = sp.getString("favoriteModelsRaw", "") ?: "",
+        mirrorFirst = sp.getBoolean("mirrorFirst", true)
     )
 
     /**
@@ -256,7 +277,9 @@ class SettingsStore(context: Context) {
             (saved == LEGACY_SYSTEM_PROMPT_V1 ||
                 saved == LEGACY_SYSTEM_PROMPT_V2 ||
                 saved == LEGACY_SYSTEM_PROMPT_V3 ||
-                saved == DEFAULT_SYSTEM_PROMPT)
+                saved == DEFAULT_SYSTEM_PROMPT ||
+                // v4 及更早的默认文案：带 v4 的特征句，同时还是我们那套分身结构
+                (saved.contains(LEGACY_V4_MARK) && saved.contains("【怎么说话】")))
         ) {
             return DEFAULT_SYSTEM_PROMPT
         }
@@ -305,6 +328,8 @@ class SettingsStore(context: Context) {
             .putBoolean("keepScreenOn", s.keepScreenOn)
             .putBoolean("notifyOnDone", s.notifyOnDone)
             .putBoolean("hapticOnSend", s.hapticOnSend)
+            .putString("favoriteModelsRaw", s.favoriteModelsRaw)
+            .putBoolean("mirrorFirst", s.mirrorFirst)
             .apply()
     }
 }

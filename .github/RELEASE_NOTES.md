@@ -1,37 +1,55 @@
 ## 中文
 
-这次修的全是你亲口报的毛病：发了图片它说「等你授权」、不给正文只把思考过程倒出来、让它截几张图它先讲一大段计划。
+v1.7.0 是这段时间攒下来的改动，主线三件事：终端终于像个终端，更新不用再跳浏览器，切模型不用再翻设置。
 
-**图片，现在真的能看了**
+**终端：常驻会话，环境补齐**
 
-以前附件只是复制进工作区、给一个路径，模型根本没看到图，只能反过来问你「要不要我读」。现在图片会先压到长边 1568、转成多模态格式随对话发出去。
+以前每敲一条命令就起一个 `sh -c`，`cd` 进去下一条又回到原点，`export` 也不留。现在改成一条常驻 shell：
 
-> 你说：[发一张截图] 帮我看看这里哪儿报错。
-> 知微直接看图回答，不再跟你要授权。
+- `cd`、`export`、`alias` 全都留得住，跟在自己机器上开终端一样
+- PATH 补齐 `/system/bin`、`/vendor/bin`、`/apex/com.android.runtime/bin`、`/data/local/bin` 等，`ls`、`ps`、`getprop`、`ip` 直接能用
+- 工作区首次初始化就建好 `uploads / notes / scripts / bin / downloads / .tmp`，开箱可用
+- 命令跑不完不用杀应用：顶栏 ✕ 中断，↻ 重开会话
+- 顶栏常显当前目录，点一下复制
+- 加了一条常用命令条（`ls -la`、`df -h`、`ps -A`、`ip addr`…），点一下填进输入行
 
-> 你说：工作区里那个 config.json 对不对？
-> 知微自己用「读文件」把内容读完再答，不用你手动贴。
+界面上的终端和模型调用的终端是两条独立会话，AI 跑工具不会打断你手敲的东西。
 
-**思考过程不再冒充正文**
+**内置更新：下完直接装**
 
-模型吐出的思维链（reasoning / thinking）单独走一条通道，折叠在气泡里，点一下才展开。万一它只给了思考、正文一个字没有，会自动再要一次，而不是把思考全甩给你。
+- 「关于」页点「下载」把安装包下到应用私有目录，进度条实时走，下完点「安装」直接调起系统安装器
+- 三条加速镜像轮着试，一条断了自动换下一条；下了一半的包断点续传，不从头再来
+- 下过的同版本包本机复用，不重复下载
+- 走应用私有目录 + FileProvider，不需要任何存储权限
+- 想自己挑线路下载的，入口还留着
 
-**废话变少了**
+**模型切换：聊天页顶栏直接点**
 
-系统提示词升到 v4：能一句说清就不写两句，不许预告、不许复述、不许汇报过程。
+顶栏那行「模型名 · 记忆 · 知识」现在可以点了：
 
-> 你说：截三张图给我。
-> 以前的知微：先列一条 3~5 步计划，每步再配一句进度说明……
-> 现在的知微：直接调「截屏」，把图带回来，答一句结果。
+- 收藏过的模型置顶，当前正在用的打勾
+- 一键刷新模型列表
+- 一键收藏 / 取消收藏当前模型
 
-**新增四个工具**
+不用再进设置翻到「模型与 API」。
 
-- 读文件 / 写文件 / 列目录：工作区里的文件模型能自己读写
-- 截屏：首次用系统会弹一次授权，之后随时能截；截好的图直接回到对话里，模型看着图回答
+**竖框加了快捷键**
 
-**设置里多了三项**
+折叠栏中间多一排：新对话 / 终端 / 工作区，一键直达。会话多了还能直接搜，标题和最后一条消息都参与匹配。
 
-模型与 API →「多模态与思考过程」：图片直传开关、图片压缩长边、思考过程显示开关。
+**提示词升到 v5**
+
+新增一层「纪律」：只做用户要的事、不顺手加需求；工具是手段不是表演，不重复调同一个；一次没成换办法，连续两次失败先问；动手前先过「目标 / 怎么算做完 / 会不会动到别的东西」。
+
+你自己改过的提示词不会被覆盖，只有还是旧版默认文案的才会自动升级。
+
+**工作区支持多级目录**
+
+能点进子目录、能回上一层、能新建文件夹、能重命名、能复制路径、能删整个目录。排序改成目录优先 + 名称升序，不再按修改时间乱跳。
+
+**关于页重做**
+
+顶部加了品牌头（名字 + 版本 + 一句话定位），镜像开关、内置更新、更新说明都收在这一页。
 
 **下载**
 
@@ -44,38 +62,56 @@
 
 ## English
 
-Every fix here came straight from what you reported: sending a picture and being told "waiting for your permission", getting a thinking chain instead of an answer, and asking for a few screenshots only to be handed a long plan first.
+v1.7.0 collects the work piled up since 1.6.0. Three threads: the terminal finally behaves like a terminal, updates no longer bounce you to a browser, and switching models no longer means digging through settings.
 
-**Images are actually visible now**
+**Terminal: persistent session, full environment**
 
-Attachments used to be copied into the workspace and handed over as a bare path, so the model never saw the picture and asked you to authorise a read. Images are now downscaled to 1568 on the long edge and sent with the conversation as proper multimodal content.
+Each command used to spawn a fresh `sh -c`, so a `cd` was lost by the next line and `export` never stuck. It is now one long-lived shell:
 
-> You: [sends a screenshot] what's failing here?
-> Zhiwei: reads the picture and answers — no permission ping-pong.
+- `cd`, `export` and `alias` all persist, like a real terminal on your own machine
+- PATH now covers `/system/bin`, `/vendor/bin`, `/apex/com.android.runtime/bin`, `/data/local/bin` and friends, so `ls`, `ps`, `getprop` and `ip` work out of the box
+- The workspace is seeded on first init with `uploads / notes / scripts / bin / downloads / .tmp`
+- No need to kill the app when a command hangs: ✕ interrupts, ↻ restarts the session
+- The current directory shows in the top bar; tap to copy it
+- A quick-command strip (`ls -la`, `df -h`, `ps -A`, `ip addr`…) fills the input with one tap
 
-> You: is `config.json` in the workspace correct?
-> Zhiwei: opens it with **read file** itself and answers, no copy-pasting required.
+The on-screen terminal and the one the model drives are separate sessions, so tool calls will not interrupt what you are typing.
 
-**Reasoning no longer poses as the answer**
+**Built-in updates: download, then install**
 
-The model's thinking chain (reasoning / thinking) travels on its own channel and stays folded in the bubble, one tap to expand. If it returns reasoning and no answer at all, the agent asks once more for the answer instead of dumping the thinking on you.
+- Tap "Download" on the About page and the APK lands in app-private storage with a live progress bar; tap "Install" to open the system installer
+- Three mirror routes are tried in turn and fall through automatically; partial downloads resume instead of restarting
+- An already-downloaded build of the same version is reused
+- App-private directory plus FileProvider, no storage permission required
+- The manual-download link stays if you prefer picking a route yourself
 
-**Far less filler**
+**Model switching from the chat top bar**
 
-The system prompt is now v4: if one sentence does it, don't write two — no pre-announcing, no restating, no narrating the process.
+The "model · memories · knowledge" line is now tappable:
 
-> You: take three screenshots.
-> Before: a 3–5 step plan, each step with a progress note…
-> Now: calls **screenshot**, brings the images back, answers with the result.
+- Favourite models pinned on top, the active one ticked
+- Refresh the model list in one tap
+- Favourite or unfavourite the current model in one tap
 
-**Four new tools**
+No more detour through Settings, Model and API.
 
-- read file / write file / list directory — the model can handle workspace files on its own
-- screenshot — one system grant the first time, then instant; the capture goes straight back into the conversation so the model answers from the picture
+**Drawer shortcuts**
 
-**Three new settings**
+A row in the middle of the drawer: new chat, terminal, workspace. Conversations are searchable too, matching both the title and the last message.
 
-Model & API → "Multimodal & reasoning": send images inline, image long-edge size, show reasoning.
+**System prompt v5**
+
+A new discipline layer: do only what was asked and do not invent extra scope; tools are a means, not a performance, so do not call the same one twice; when an approach fails, switch, and after two failures ask; before acting, check the goal, the definition of done, and what else might be touched.
+
+Prompts you have edited yourself are never overwritten. Only untouched stock text gets upgraded.
+
+**Workspace gains real directory navigation**
+
+Enter subdirectories, go back up, create folders, rename entries, copy paths, delete whole directories. Sorting is now directories first, then by name, instead of jumping around by modification time.
+
+**About page reworked**
+
+A brand header up top with the name, version and a one-line positioning statement, then the mirror toggle, built-in update and release notes, all on one page.
 
 **Download**
 

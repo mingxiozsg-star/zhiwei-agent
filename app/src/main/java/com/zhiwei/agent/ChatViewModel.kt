@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.zhiwei.agent.agent.AgentEnv
 import com.zhiwei.agent.agent.ImageSupport
 import com.zhiwei.agent.agent.ShellRunner
+import com.zhiwei.agent.agent.Term
 import com.zhiwei.agent.agent.ToolRegistry
 import com.zhiwei.agent.agent.ToolSpec
 import com.zhiwei.agent.data.ACT_DONE
@@ -39,7 +40,9 @@ import com.zhiwei.agent.data.ToolCall
 import com.zhiwei.agent.data.UsageSnapshot
 import com.zhiwei.agent.net.ChatApi
 import com.zhiwei.agent.net.ChatEvent
+import com.zhiwei.agent.net.DownloadState
 import com.zhiwei.agent.net.UpdateChecker
+import com.zhiwei.agent.net.UpdateInstaller
 import com.zhiwei.agent.net.UpdateState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -128,6 +131,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _terminalBusy = MutableStateFlow(false)
     val terminalBusy: StateFlow<Boolean> = _terminalBusy.asStateFlow()
 
+    /** 终端会话当前所在目录，跟真终端一样会随 cd 变 */
+    private val _terminalCwd = MutableStateFlow("")
+    val terminalCwd: StateFlow<String> = _terminalCwd.asStateFlow()
+
     private val _memories = MutableStateFlow<List<MemoryItem>>(emptyList())
     val memories: StateFlow<List<MemoryItem>> = _memories.asStateFlow()
 
@@ -156,12 +163,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 工作区（智能体的 home 目录） */
     private val _workspace = MutableStateFlow<List<WorkspaceEntry>>(emptyList())
     val workspace: StateFlow<List<WorkspaceEntry>> = _workspace.asStateFlow()
+
+    /** 当前浏览的目录，点进子目录就变；留空代表工作区根 */
+    private val _workspacePath = MutableStateFlow("")
+    val workspacePath: StateFlow<String> = _workspacePath.asStateFlow()
     /** 正在查看的文件：标题 -> 内容 */
     private val _workspacePreview = MutableStateFlow<Pair<String, String>?>(null)
     val workspacePreview: StateFlow<Pair<String, String>?> = _workspacePreview.asStateFlow()
     /** 更新检查结果 */
     private val _update = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val update: StateFlow<UpdateState> = _update.asStateFlow()
+
+    /** 更新包下载状态（内置更新：下完直接装） */
+    private val _download = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val download: StateFlow<DownloadState> = _download.asStateFlow()
+
+    private var downloadJob: Job? = null
     /** 角色卡：智能体的人设，用户可自己编辑 */
     private val _persona = MutableStateFlow(personaStore.load())
     val persona: StateFlow<Persona> = _persona.asStateFlow()
@@ -1164,6 +1181,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 换模型：聊天页上直接切，不用绕进设置里 */
+    fun setModel(name: String) {
+        val m = name.trim()
+        if (m.isEmpty()) return
+        if (m == _settings.value.model) return
+        updateSettings { it.copy(model = m) }
+        _notice.value = "已切到 $m"
+    }
+
+    /** 收藏 / 取消收藏常用模型，收藏的会置顶 */
+    fun toggleFavoriteModel(name: String) {
+        val m = name.trim()
+        if (m.isEmpty()) return
+        val cur = _settings.value.favoriteModels()
+        val next = if (cur.contains(m)) cur.filterNot { it == m } else cur + m
+        updateSettings { it.copy(favoriteModelsRaw = next.joinToString("\n")) }
+        _notice.value = if (next.contains(m)) "已收藏 $m" else "已取消收藏 $m"
+    }
+
     fun clearNotice() {
         _notice.value = null
     }
@@ -1227,12 +1263,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun runCommand(command: String) {
         val cmd = command.trim()
         if (cmd.isEmpty() || _terminalBusy.value) return
+        if (cmd == "clear") {
+            _terminalLines.value = emptyList()
+            return
+        }
         _terminalLines.update { it + TerminalLine("$ $cmd", isCommand = true) }
         _terminalBusy.value = true
         viewModelScope.launch {
             val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
-            val result = withContext(Dispatchers.IO) { ShellRunner.run(cmd, home, timeoutMs = 30000) }
-            val out = result.output.trimEnd()
+            val session = Term.ui(home)
+            // 常驻会话：cd / export 都留得住，跑完把当前目录带回来
+            val result = withContext(Dispatchers.IO) { session.run(cmd, timeoutMs = 60000) }
+            _terminalCwd.value = result.cwd
+            val out = result.output
             _terminalLines.update { list ->
                 val added = mutableListOf<TerminalLine>()
                 if (out.isNotEmpty()) added.add(TerminalLine(out, isError = !result.ok))
@@ -1245,8 +1288,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 中断正在跑的命令：直接重建会话，跑飞的东西一起停 */
+    fun interruptCommand() {
+        val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
+        Term.ui(home).reset()
+        _terminalBusy.value = false
+        _terminalCwd.value = home.absolutePath
+        _terminalLines.update { it + TerminalLine("^C 已中断", isError = true) }
+    }
+
+    /** 会话跑了半天状态乱了，或者 cd 到别处回不来，一键重开 */
+    fun restartTerminalSession() {
+        val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
+        Term.ui(home).reset()
+        _terminalBusy.value = false
+        _terminalCwd.value = home.absolutePath
+        _terminalLines.update { it + TerminalLine("# 会话已重开，回到 $home", isError = false) }
+    }
+
     fun clearTerminal() {
         _terminalLines.value = emptyList()
+    }
+
+    /** 一进终端先把当前目录亮出来，不做别的 */
+    fun terminalHome() {
+        val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
+        _terminalCwd.value = home.absolutePath
+    }
+
+    /** 把当前目录设成工作区根，方便从终端跳过去 */
+    fun terminalToWorkspace() {
+        val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
+        runCommand("cd ${home.absolutePath}")
     }
 
     // ---------- 杂项 ----------
@@ -1283,14 +1356,79 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 工作区：智能体的 home 目录 ----------
 
-    fun workspaceDir(): String =
-        ShellRunner.homeDir(getApplication<Application>().filesDir).absolutePath
+    fun workspaceDir(): String = workspaceRoot().absolutePath
+
+    /** 工作区根目录（固定不动） */
+    private fun workspaceRoot(): File =
+        ShellRunner.homeDir(getApplication<Application>().filesDir)
+
+    /** 现在正看着的目录 */
+    fun currentWorkspacePath(): String =
+        _workspacePath.value.ifBlank { workspaceRoot().absolutePath }
 
     fun refreshWorkspace() {
         viewModelScope.launch {
-            val root = ShellRunner.homeDir(getApplication<Application>().filesDir)
-            _workspace.value = withContext(Dispatchers.IO) { listWorkspace(root) }
+            val root = workspaceRoot()
+            val dir = File(currentWorkspacePath())
+            // 目录被删掉或跑到根外面去了，就退回根，别挂着一个不存在的路径
+            val target =
+                if (dir.exists() && dir.absolutePath.startsWith(root.absolutePath)) dir else root
+            _workspacePath.value = target.absolutePath
+            _workspace.value = withContext(Dispatchers.IO) { listWorkspace(target) }
         }
+    }
+
+    /** 点进子目录 */
+    fun enterWorkspaceDir(entry: WorkspaceEntry) {
+        if (!entry.isDir) return
+        _workspacePath.value = entry.path
+        refreshWorkspace()
+    }
+
+    /** 退回上一层；已经在根目录就不动 */
+    fun workspaceUp() {
+        val root = workspaceRoot()
+        val cur = File(currentWorkspacePath())
+        if (cur.absolutePath == root.absolutePath) return
+        val parent = cur.parentFile ?: return
+        _workspacePath.value =
+            if (parent.absolutePath.startsWith(root.absolutePath)) parent.absolutePath
+            else root.absolutePath
+        refreshWorkspace()
+    }
+
+    /** 在当前目录里新建文件夹 */
+    fun newWorkspaceFolder(name: String) {
+        val n = name.trim()
+        if (n.isEmpty()) return
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { File(File(currentWorkspacePath()), n).mkdirs() }.getOrDefault(false)
+            }
+            _notice.value = if (ok) "已建文件夹 $n" else "建文件夹失败：$n"
+            refreshWorkspace()
+        }
+    }
+
+    /** 重命名文件或文件夹 */
+    fun renameWorkspaceEntry(entry: WorkspaceEntry, newName: String) {
+        val n = newName.trim()
+        if (n.isEmpty() || n == entry.name) return
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val src = File(entry.path)
+                    src.renameTo(File(src.parentFile, n))
+                }.getOrDefault(false)
+            }
+            _notice.value = if (ok) "已重命名为 $n" else "重命名失败"
+            refreshWorkspace()
+        }
+    }
+
+    /** 复制完整路径，方便贴到终端或别处 */
+    fun copyWorkspacePath(entry: WorkspaceEntry) {
+        copyToClipboard(entry.path)
     }
 
     private fun listWorkspace(root: File): List<WorkspaceEntry> {
@@ -1304,14 +1442,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 isDir = f.isDirectory
             )
         }.sortedWith(
-            compareByDescending<WorkspaceEntry> { it.isDir }.thenByDescending { it.modified }
+            compareByDescending<WorkspaceEntry> { it.isDir }
+                .thenBy { it.name.lowercase() }
         )
     }
 
-    /** 看一眼文本文件；二进制和超大文件直接说明白，不硬塞 */
+    /** 点一下文件先看内容；点目录就直接进去 */
     fun openWorkspaceFile(entry: WorkspaceEntry) {
         if (entry.isDir) {
-            _notice.value = "暂不支持子目录：${entry.name}"
+            enterWorkspaceDir(entry)
             return
         }
         val f = File(entry.path)
@@ -1336,7 +1475,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteWorkspaceFile(entry: WorkspaceEntry) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching { File(entry.path).delete() }.getOrDefault(false)
+                runCatching {
+                    val f = File(entry.path)
+                    if (f.isDirectory) f.deleteRecursively() else f.delete()
+                }.getOrDefault(false)
             }
             _notice.value = if (ok) "已删除 ${entry.name}" else "删除失败：${entry.name}"
             refreshWorkspace()
@@ -1348,7 +1490,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun appVersionName(): String = runCatching {
         val app = getApplication<Application>()
         app.packageManager.getPackageInfo(app.packageName, 0).versionName
-    }.getOrNull() ?: "1.4.0"
+    }.getOrNull() ?: "1.6.0"
 
     fun checkUpdate() {
         if (_update.value is UpdateState.Checking) return
@@ -1365,6 +1507,62 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissUpdate() {
         _update.value = UpdateState.Idle
     }
+
+    /**
+     * 内置更新：把安装包下到应用自己的目录里，下完直接调起系统安装器。
+     * 已经下过的同版本包直接拿来装，不重复下载。
+     */
+    fun downloadUpdate() {
+        val info = (_update.value as? UpdateState.Done)?.info ?: return
+        val app = getApplication<Application>()
+        if (_download.value is DownloadState.Running) return
+
+        val cached = UpdateInstaller.cachedApk(app, info.tag)
+        if (cached != null && cached.length() > 0) {
+            _download.value = DownloadState.Done(cached, true)
+            _notice.value = "这个版本的安装包已经在本机了，直接点安装"
+            return
+        }
+
+        downloadJob?.cancel()
+        val job = viewModelScope.launch {
+            _download.value = DownloadState.Running(-1, 0, 0, _settings.value.mirrorFirst)
+            try {
+                val file = UpdateInstaller.download(app, info, _settings.value.mirrorFirst) { pct, got, total, mirror ->
+                    _download.value = DownloadState.Running(pct, got, total, mirror)
+                }
+                _download.value = DownloadState.Done(file, mirror)
+                _notice.value = "下载完成：${file.name}"
+            } catch (e: Exception) {
+                _download.value = DownloadState.Failed(e.message ?: "下载失败")
+            }
+        }
+        downloadJob = job
+    }
+
+    /** 调起系统安装器；没给权限就先跳去授权页，回来再点一次 */
+    fun installUpdate() {
+        val app = getApplication<Application>()
+        val file = (_download.value as? DownloadState.Done)?.file ?: return
+        if (!UpdateInstaller.canInstall(app)) {
+            UpdateInstaller.openInstallPermission(app)
+            _notice.value = "先给一下「安装未知来源应用」权限，回来再点安装"
+            return
+        }
+        if (!UpdateInstaller.install(app, file)) {
+            _notice.value = "调不起安装器，去系统里手动装这个包"
+        }
+    }
+
+    fun cancelDownloadUpdate() {
+        downloadJob?.cancel()
+        _download.value = DownloadState.Idle
+    }
+
+    /** 这次下载走了哪条线路：true = 镜像加速，false = 官方直链 */
+    val downloadViaMirror: Boolean
+        get() = (_download.value as? DownloadState.Running)?.viaMirror == true ||
+            (_download.value as? DownloadState.Done)?.viaMirror == true
 }
 
 /** 人类看得懂的大小 */

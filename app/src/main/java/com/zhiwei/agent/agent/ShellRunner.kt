@@ -12,8 +12,10 @@ data class ShellResult(
 }
 
 /**
- * 轻量本地终端执行器。
- * 不以 root 运行，权限等同于应用自身：能读写自己的沙箱目录与有权限的公共目录。
+ * 本地终端：不以 root 运行，权限等同于应用自身。
+ *
+ * 这里只保留「一次性命令」的入口（跑完就退，不留状态），
+ * 需要保留 cd / export 的持久终端在 [ShellSession] 里。
  */
 object ShellRunner {
 
@@ -22,9 +24,43 @@ object ShellRunner {
     /** 终端默认工作目录：应用私有 home */
     fun homeDir(contextBase: File): File {
         val home = File(contextBase, "home")
-        if (!home.exists()) home.mkdirs()
+        ensureLayout(home)
         return home
     }
+
+    /**
+     * 工作区标准目录：一进来就是能用的样子，不用自己先 mkdir。
+     * uploads 放附件、notes 放笔记、scripts 放脚本、bin 放自己塞的可执行文件。
+     */
+    fun ensureLayout(home: File) {
+        if (!home.exists()) home.mkdirs()
+        listOf("uploads", "notes", "scripts", "bin", "downloads", ".tmp").forEach {
+            val d = File(home, it)
+            if (!d.exists()) d.mkdirs()
+        }
+    }
+
+    /** 会话环境变量：把 PATH 补齐，别让 ls/grep 之类的命令找不到 */
+    fun envMap(home: File): Map<String, String> = mapOf(
+        "HOME" to home.absolutePath,
+        "TMPDIR" to File(home, ".tmp").absolutePath,
+        "PWD" to home.absolutePath,
+        "SHELL" to "sh",
+        "TERM" to "xterm-256color",
+        "LANG" to "en_US.UTF-8",
+        "LC_ALL" to "en_US.UTF-8",
+        "PATH" to listOf(
+            File(home, "bin").absolutePath,
+            "/system/bin",
+            "/system/xbin",
+            "/vendor/bin",
+            "/vendor/xbin",
+            "/apex/com.android.runtime/bin",
+            "/apex/com.android.art/bin",
+            "/data/local/bin",
+            "/data/local/tmp"
+        ).distinct().joinToString(":")
+    )
 
     fun run(
         command: String,
@@ -38,6 +74,7 @@ object ShellRunner {
             val pb = ProcessBuilder("sh", "-c", cmd)
             pb.directory(workDir)
             pb.redirectErrorStream(true)
+            pb.environment().putAll(envMap(workDir))
             val process = pb.start()
             val sb = StringBuilder()
             val reader = process.inputStream.bufferedReader()

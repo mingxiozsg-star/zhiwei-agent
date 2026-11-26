@@ -13,6 +13,13 @@ const val REPO_URL = "https://github.com/$REPO"
 const val RELEASES_URL = "$REPO_URL/releases"
 const val MIRROR_PREFIX = "https://ghfast.top/"
 
+/** 加速线路：按顺序试，前一条不通就换下一跳 */
+val MIRRORS = listOf(
+    "https://ghfast.top/",
+    "https://ghproxy.net/",
+    "https://gh-proxy.com/"
+)
+
 /** 一个新版本 */
 data class UpdateInfo(
     val tag: String,
@@ -23,8 +30,12 @@ data class UpdateInfo(
     val apkSize: Long,
     val pageUrl: String
 ) {
+    /** 所有加速线路下的同一个安装包地址 */
+    val mirrorUrls: List<String>
+        get() = if (apkUrl.isBlank()) emptyList() else MIRRORS.map { it + apkUrl }
+
     val mirrorUrl: String
-        get() = if (apkUrl.isBlank()) pageUrl else MIRROR_PREFIX + apkUrl
+        get() = mirrorUrls.firstOrNull() ?: pageUrl
 }
 
 /** 更新检查的状态机 */
@@ -48,7 +59,7 @@ object UpdateChecker {
 
     suspend fun check(currentVersion: String): Result<UpdateInfo> = withContext(Dispatchers.IO) {
         val direct = "https://api.github.com/repos/$REPO/releases/latest"
-        val urls = listOf(direct, MIRROR_PREFIX + direct)
+        val urls = listOf(direct) + MIRRORS.map { it + direct }
         var lastError: String? = null
         for (u in urls) {
             val r = runCatching { fetch(u) }
