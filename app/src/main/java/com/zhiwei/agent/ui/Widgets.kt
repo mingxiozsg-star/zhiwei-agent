@@ -510,7 +510,7 @@ fun ReasoningFold(text: String) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "${text.length} 字",
                 style = MaterialTheme.typography.labelSmall,
@@ -543,6 +543,6 @@ fun SectionLabel(text: String) {
         text = text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 4.dp)
+        modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 6.dp)
     )
 }

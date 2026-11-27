@@ -70,6 +70,7 @@ fun KnowledgeScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                 title = {
                     Column {
                         Text("知识库", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(3.dp))
                         Text(
                             text = "共 ${knowledge.size} 份资料 · 回答时按需引用",
                             style = MaterialTheme.typography.labelSmall,

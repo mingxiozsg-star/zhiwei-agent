@@ -71,6 +71,7 @@ fun MemoryScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                 title = {
                     Column {
                         Text("记忆库", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(3.dp))
                         Text(
                             text = "共 ${memories.size} 条 · 从对话自动沉淀，跨对话可用",
                             style = MaterialTheme.typography.labelSmall,

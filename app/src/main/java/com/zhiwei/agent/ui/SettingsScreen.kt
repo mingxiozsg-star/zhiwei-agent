@@ -210,7 +210,7 @@ fun SetGroupRow(group: SettingsGroup, onClick: () -> Unit) {
                     modifier = Modifier.size(17.dp)
                 )
             }
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = group.desc,
                 style = MaterialTheme.typography.bodySmall,
@@ -269,7 +269,10 @@ fun SetSection(title: String, content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 fun SetDivider() {
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.outlineVariant,
+        modifier = Modifier.padding(vertical = 3.dp)
+    )
 }
 
 @Composable
@@ -288,6 +291,7 @@ fun SetSwitch(
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)
             if (!subtitle.isNullOrBlank()) {
+                Spacer(Modifier.height(3.dp))
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
@@ -320,6 +324,7 @@ fun SetStepper(
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)
             if (!subtitle.isNullOrBlank()) {
+                Spacer(Modifier.height(3.dp))
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
@@ -374,13 +379,14 @@ fun SetChipPicker(
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
         Text(title, style = MaterialTheme.typography.bodyMedium)
         if (!subtitle.isNullOrBlank()) {
+            Spacer(Modifier.height(3.dp))
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Spacer(Modifier.height(7.dp))
+        Spacer(Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -424,6 +430,7 @@ fun SetTextField(
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
         Text(title, style = MaterialTheme.typography.bodyMedium)
         if (!subtitle.isNullOrBlank()) {
+            Spacer(Modifier.height(3.dp))
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
@@ -453,6 +460,7 @@ fun SetInfo(title: String, value: String, subtitle: String? = null) {
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)
             if (!subtitle.isNullOrBlank()) {
+                Spacer(Modifier.height(3.dp))
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
@@ -488,6 +496,7 @@ fun SetAction(
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)
             if (!subtitle.isNullOrBlank()) {
+                Spacer(Modifier.height(3.dp))
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
@@ -504,6 +513,7 @@ fun SetAction(
 fun SetStat(label: String, value: String) {
     Column {
         Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(2.dp))
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,

@@ -150,6 +150,7 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.titleMedium
                         )
+                        Spacer(Modifier.height(3.dp))
                         Box {
                             Text(
                                 text = settings.model.ifBlank { "未设置模型" } +

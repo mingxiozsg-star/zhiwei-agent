@@ -1,18 +1,16 @@
 ## 中文
 
-v1.7.1 是一个收尾小版本，重点在设置页和整体观感。
+v1.7.2 只做一件事：把「字挤字」的问题彻底理顺。
 
-**设置页不再堆「开发中」占位**
+**间距统一，不再粘成一片**
 
-之前十几个分类里塞了一堆「路线图 / 开发中」的空壳条目，看着像没做完。这一版全部清掉，设置页只留真实能用的开关，打开就知道哪些能用。
+上一版设置页、抽屉、记忆库、知识库、工具页、工作区里，标题和副标题、两行文字之间几乎没有间距，看着像糊在一起。这一版全量排查并补齐：
 
-**字体统一**
-
-原来只定义了一档字号，其余全靠系统默认兜底，行高参差；还多加了字距，中文会被拉得松散。现在补全整套字号阶梯，去掉对中文有害的字距，标题、正文、小字逐级对齐。
-
-**配色收敛**
-
-之前只设了主色，其余颜色落回系统默认的紫色，和樱粉主色混在一起显得乱。这一版把浅色 / 深色两套配色全部显式定义，中性色统一成灰蓝，背景换成极淡粉白，观感干净一致。
+- 设置页所有控件（开关 / 步进 / 滑杆 / 输入框 / 信息行 / 操作按钮）的标题与副标题之间加开间距，分隔线上下各留白
+- 抽屉顶部标题、会话行两行文字、底部版本号之间的间距拉开
+- 聊天页顶栏标题与「模型 · 记忆 · 知识」副标题之间不再贴死
+- 记忆库、知识库、工具与插件、工作区页面的顶栏标题与统计副标题之间加开间距
+- 卡片内的两行文字（名称 + 说明 / 名称 + 时间）不再直接挨着
 
 **下载**
 
@@ -25,19 +23,17 @@ v1.7.1 是一个收尾小版本，重点在设置页和整体观感。
 
 ## English
 
-v1.7.1 is a small polish release focused on the settings page and overall look.
+v1.7.2 does one thing: untangles the cramped text everywhere.
 
-**No more "under development" placeholders**
+**Breathing room for every label**
 
-Earlier settings pages were cluttered with "roadmap / in progress" stub entries that looked unfinished. They are all gone now; settings only show features that actually work.
+The previous build left almost no spacing between titles and subtitles, or between stacked lines, across settings, drawer, memories, knowledge, plugins and workspace. This release audits and fixes all of them:
 
-**Unified typography**
-
-Only one text style was defined before, so the rest fell back to system defaults with uneven line heights, and the extra letter spacing made CJK text look loose. The full type scale is now defined, the harmful spacing is removed, and heading, body and caption sizes are properly stepped.
-
-**Tamed the color scheme**
-
-Previously only the primary colors were set, so the rest fell back to the system default purple and clashed with the sakura pink. Both light and dark schemes are now fully specified with unified gray-blue neutrals and a very light pink-white background.
+- Settings controls (switch / stepper / slider / text field / info row / action button) now space their title and subtitle, with padding around every divider
+- Drawer header, conversation rows and footer version get proper spacing
+- The chat top bar no longer crams the title against the "model · memory · knowledge" line
+- Memories, knowledge, plugins and workspace top bars space the title from the stats subtitle
+- Card contents no longer glue the name to the description or timestamp
 
 **Download**
 

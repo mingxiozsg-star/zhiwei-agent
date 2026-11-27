@@ -90,7 +90,7 @@ fun ConversationDrawer(
             text = "本地运行 · 数据只存本机",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 6.dp, top = 2.dp)
+            modifier = Modifier.padding(start = 6.dp, top = 4.dp)
         )
 
         Spacer(Modifier.height(10.dp))
@@ -230,7 +230,7 @@ fun ConversationDrawer(
             text = "v$versionName",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 6.dp, top = 6.dp)
+            modifier = Modifier.padding(start = 6.dp, top = 10.dp)
         )
     }
 }
@@ -267,7 +267,7 @@ private fun DrawerQuickButton(
                     MaterialTheme.colorScheme.onSurfaceVariant
                 }
             )
-            Spacer(Modifier.height(3.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
@@ -316,7 +316,7 @@ private fun DrawerNavRow(
                     MaterialTheme.colorScheme.onSurfaceVariant
                 }
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyMedium,
@@ -370,6 +370,7 @@ private fun ConversationRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                Spacer(Modifier.height(3.dp))
                 Text(
                     text = previewOf(conversation) + " · " + timeFmt.format(Date(conversation.updatedAt)),
                     style = MaterialTheme.typography.labelSmall,

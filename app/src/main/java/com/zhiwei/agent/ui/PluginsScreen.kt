@@ -74,6 +74,7 @@ fun PluginsScreen(vm: ChatViewModel, onOpenDrawer: () -> Unit = {}) {
                 title = {
                     Column {
                         Text("工具与插件", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(3.dp))
                         Text(
                             text = "自定义 ${plugins.size} 个 · 兼容 OpenAI / MCP 格式",
                             style = MaterialTheme.typography.labelSmall,
@@ -275,6 +276,7 @@ private fun PluginRow(
                     text = plugin.name.ifBlank { "未命名工具" },
                     style = MaterialTheme.typography.bodyLarge
                 )
+                Spacer(Modifier.height(3.dp))
                 Text(
                     text = kindLabel(plugin.kind) +
                         if (plugin.description.isBlank()) "" else " · " + plugin.description,

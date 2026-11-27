@@ -91,6 +91,7 @@ fun WorkspaceScreen(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text("工作区", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(3.dp))
                     Text(
                         text = vm.workspaceDir(),
                         style = MaterialTheme.typography.labelSmall,
@@ -237,6 +238,7 @@ private fun WorkspaceRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                Spacer(Modifier.height(3.dp))
                 Text(
                     text = buildString {
                         if (!entry.isDir) append(readableSize(entry.size)).append(" · ")
