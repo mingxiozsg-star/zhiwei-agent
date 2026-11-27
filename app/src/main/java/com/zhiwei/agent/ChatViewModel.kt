@@ -311,6 +311,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         setMessages(_messages.value.filterNot { it.id == id }, persist = true)
     }
 
+    /** 编辑重发：只允许编辑用户消息；编辑后截断这条之后的历史，再补一条新用户消息重新跑 */
+    fun editAndResend(id: String, newText: String) {
+        if (_busy.value) return
+        val input = newText.trim()
+        if (input.isEmpty()) return
+        val list = _messages.value
+        val idx = list.indexOfFirst { it.id == id }
+        if (idx < 0 || list[idx].role != ROLE_USER) return
+        // 保留这条消息（改掉内容）及其之前的历史，丢掉它之后的所有回合
+        val head = list.take(idx + 1).map {
+            if (it.id == id) it.copy(content = input) else it
+        }
+        setMessages(head, persist = true)
+        startRun()
+    }
+
+    /** 把一条用户消息内容放回输入框（由 UI 接管编辑态，不直接发） */
+    fun messageTextFor(id: String): String =
+        _messages.value.firstOrNull { it.id == id && it.role == ROLE_USER }?.content ?: ""
+
     fun exportCurrent(): String {
         val conv = currentConversation ?: return ""
         return store.exportMarkdown(conv)

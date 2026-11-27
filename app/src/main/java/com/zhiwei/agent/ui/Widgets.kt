@@ -60,6 +60,7 @@ fun MessageItem(
     onCopy: (String) -> Unit,
     onDelete: () -> Unit,
     onRegenerate: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
     showTimestamp: Boolean = false,
     collapseMode: String = COLLAPSE_MULTI,
     showReasoning: Boolean = true
@@ -96,7 +97,8 @@ fun MessageItem(
                     onDismiss = { menu = false },
                     onCopy = { onCopy(message.content) },
                     onDelete = onDelete,
-                    onRegenerate = null
+                    onRegenerate = null,
+                    onEdit = onEdit
                 )
             }
             if (showTimestamp) TimestampLabel(message.timestamp, Alignment.End)
@@ -160,7 +162,8 @@ fun MessageItem(
                     onDismiss = { menu = false },
                     onCopy = { onCopy(message.content) },
                     onDelete = onDelete,
-                    onRegenerate = onRegenerate
+                    onRegenerate = onRegenerate,
+                    onEdit = onEdit
                 )
             }
             if (showTimestamp) TimestampLabel(message.timestamp, Alignment.Start)
@@ -401,7 +404,8 @@ private fun MessageMenu(
     onDismiss: () -> Unit,
     onCopy: () -> Unit,
     onDelete: () -> Unit,
-    onRegenerate: (() -> Unit)?
+    onRegenerate: (() -> Unit)?,
+    onEdit: (() -> Unit)? = null
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(
@@ -411,6 +415,15 @@ private fun MessageMenu(
                 onCopy()
             }
         )
+        if (onEdit != null) {
+            DropdownMenuItem(
+                text = { Text("编辑重发") },
+                onClick = {
+                    onDismiss()
+                    onEdit()
+                }
+            )
+        }
         if (onRegenerate != null) {
             DropdownMenuItem(
                 text = { Text("重新生成") },

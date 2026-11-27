@@ -17,8 +17,14 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -57,12 +63,56 @@ class ChatApi {
     /** 一次请求最多带几张图：再多请求体就太大了 */
     private val maxImagesPerRequest = 4
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
+    /** 按设置动态构建 OkHttpClient：代理 / SSL 校验 / 超时都从这里生效 */
+    private fun buildClient(s: AppSettings): OkHttpClient {
+        val seconds = s.requestTimeoutSec.coerceIn(10, 600).toLong()
+        val b = OkHttpClient.Builder()
+            .connectTimeout(seconds, TimeUnit.SECONDS)
+            .readTimeout(seconds, TimeUnit.SECONDS)
+            .writeTimeout(seconds, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+        parseProxy(s.proxy)?.let { b.proxy(it) }
+        if (!s.sslVerify) {
+            b.hostnameVerifier { _, _ -> true }
+            b.sslSocketFactory(unsafeSslFactory(), UnsafeTrustManager)
+        }
+        return b.build()
+    }
+
+    private fun parseProxy(raw: String): Proxy? {
+        val v = raw.trim()
+        if (v.isEmpty()) return null
+        val hostPort = when {
+            v.startsWith("http://") -> v.removePrefix("http://")
+            v.startsWith("https://") -> v.removePrefix("https://")
+            v.startsWith("socks://") -> return Proxy(Proxy.Type.SOCKS, splitHostPort(v.removePrefix("socks://")) ?: return null)
+            v.startsWith("socks5://") -> return Proxy(Proxy.Type.SOCKS, splitHostPort(v.removePrefix("socks5://")) ?: return null)
+            else -> v
+        }
+        val hp = splitHostPort(hostPort) ?: return null
+        return Proxy(Proxy.Type.HTTP, hp)
+    }
+
+    private fun splitHostPort(v: String): InetSocketAddress? {
+        val idx = v.lastIndexOf(':')
+        if (idx <= 0 || idx == v.lastIndex) return null
+        val host = v.substring(0, idx).trim()
+        val port = v.substring(idx + 1).trim().toIntOrNull() ?: return null
+        if (host.isEmpty() || port !in 1..65535) return null
+        return InetSocketAddress(host, port)
+    }
+
+    private fun unsafeSslFactory(): javax.net.ssl.SSLSocketFactory {
+        val ctx = SSLContext.getInstance("TLS")
+        ctx.init(null, arrayOf(UnsafeTrustManager), SecureRandom())
+        return ctx.socketFactory
+    }
+
+    private object UnsafeTrustManager : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+    }
 
     @Volatile
     private var activeCall: Call? = null
@@ -151,7 +201,7 @@ class ChatApi {
         try {
             val body = buildBody(settings, history, tools, stream = false, imageLoader = imageLoader)
             val request = buildRequest(settings, body, key)
-            val call = client.newCall(request)
+            val call = buildClient(settings).newCall(request)
             activeCall = call
             call.execute().use { resp ->
                 val text = resp.body?.string() ?: ""
@@ -220,7 +270,7 @@ class ChatApi {
     ): AttemptError? {
         val body = buildBody(settings, history, tools, stream = true, imageLoader = imageLoader)
         val request = buildRequest(settings, body, key)
-        val call = client.newCall(request)
+        val call = buildClient(settings).newCall(request)
         activeCall = call
         try {
             call.execute().use { resp ->
@@ -437,7 +487,7 @@ class ChatApi {
                     .apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }
                     .get()
                     .build()
-                client.newCall(request).execute().use { resp ->
+                buildClient(settings).newCall(request).execute().use { resp ->
                     val text = resp.body?.string() ?: ""
                     if (!resp.isSuccessful) {
                         return@withContext Result.failure(IOException(describeHttpError(resp.code, text)))
@@ -465,7 +515,7 @@ class ChatApi {
                     .apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }
                     .get()
                     .build()
-                client.newCall(request).execute().use { resp ->
+                buildClient(settings).newCall(request).execute().use { resp ->
                     if (resp.isSuccessful) {
                         Result.success("可用")
                     } else {

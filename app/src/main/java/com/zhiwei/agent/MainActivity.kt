@@ -47,6 +47,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zhiwei.agent.data.Conversation
 import com.zhiwei.agent.data.THEME_DARK
 import com.zhiwei.agent.data.THEME_LIGHT
+import com.zhiwei.agent.data.THEME_AMOLED
 import com.zhiwei.agent.ui.ChatScreen
 import com.zhiwei.agent.ui.ConversationDrawer
 import com.zhiwei.agent.ui.KnowledgeScreen
@@ -68,10 +69,11 @@ class MainActivity : ComponentActivity() {
             val settings by vm.settings.collectAsState()
             val dark = when (settings.themeMode) {
                 THEME_LIGHT -> false
-                THEME_DARK -> true
+                THEME_DARK, THEME_AMOLED -> true
                 else -> isSystemInDarkTheme()
             }
-            ZhiweiAgentTheme(darkTheme = dark) {
+            val amoled = settings.themeMode == THEME_AMOLED
+            ZhiweiAgentTheme(darkTheme = dark, amoled = amoled) {
                 ZhiweiApp(vm)
             }
         }

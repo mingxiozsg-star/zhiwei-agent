@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.data.ROLE_ASSISTANT
+import com.zhiwei.agent.data.ROLE_USER
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -110,6 +111,8 @@ fun ChatScreen(
     var modelMenuOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
+    var editId by remember { mutableStateOf<String?>(null) }
+    var editText by remember { mutableStateOf("") }
 
     val current = conversations.firstOrNull { it.id == currentId }
 
@@ -429,6 +432,14 @@ fun ChatScreen(
                             onCopy = { vm.copyToClipboard(it) },
                             onDelete = { vm.deleteMessage(m.id) },
                             onRegenerate = if (m.role == ROLE_ASSISTANT) ({ vm.regenerate() }) else null,
+                            onEdit = if (m.role == ROLE_USER && settings.enableMessageEdit) {
+                                {
+                                    editId = m.id
+                                    editText = m.content
+                                }
+                            } else {
+                                null
+                            },
                             showTimestamp = settings.showTimestamp,
                             collapseMode = settings.collapseMode,
                             showReasoning = settings.showReasoning
@@ -582,6 +593,30 @@ fun ChatScreen(
             },
             dismissButton = {
                 TextButton(onClick = { renameOpen = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (editId != null) {
+        AlertDialog(
+            onDismissRequest = { editId = null },
+            title = { Text("编辑重发") },
+            text = {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { editText = it },
+                    label = { Text("这条消息及之后的回复都会被替换") },
+                    minLines = 3
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    editId?.let { vm.editAndResend(it, editText) }
+                    editId = null
+                }) { Text("重发") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editId = null }) { Text("取消") }
             }
         )
     }

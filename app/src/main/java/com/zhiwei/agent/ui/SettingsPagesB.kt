@@ -40,6 +40,7 @@ import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.data.COLLAPSE_MULTI
 import com.zhiwei.agent.data.COLLAPSE_NONE
 import com.zhiwei.agent.data.COLLAPSE_SINGLE
+import com.zhiwei.agent.data.THEME_AMOLED
 import com.zhiwei.agent.data.THEME_DARK
 import com.zhiwei.agent.data.THEME_LIGHT
 import com.zhiwei.agent.data.THEME_SYSTEM
@@ -64,7 +65,8 @@ fun ThemeSettingsPage(vm: ChatViewModel) {
                 options = listOf(
                     THEME_SYSTEM to "跟随系统",
                     THEME_LIGHT to "浅色",
-                    THEME_DARK to "深色"
+                    THEME_DARK to "深色",
+                    THEME_AMOLED to "AMOLED 纯黑"
                 )
             ) { v -> vm.updateSettings { it.copy(themeMode = v) } }
         }
@@ -149,6 +151,12 @@ fun ChatSettingsPage(vm: ChatViewModel) {
         }
 
         SetSection("消息操作") {
+            SetSwitch(
+                title = "长按消息可编辑重发",
+                subtitle = "编辑任意一条用户消息后，它之后的所有回复都会被替换",
+                checked = settings.enableMessageEdit
+            ) { v -> vm.updateSettings { it.copy(enableMessageEdit = v) } }
+            SetDivider()
             SetInfo(
                 title = "删除消息",
                 value = "长按气泡",
@@ -265,6 +273,39 @@ fun NetSettingsPage(vm: ChatViewModel) {
                 value = "${settings.usableKeys().size} 个",
                 subtitle = "轮换顺序按填写顺序来"
             )
+        }
+
+        SetSection("代理") {
+            SetTextField(
+                title = "HTTP 代理",
+                value = settings.proxy,
+                subtitle = "格式 host:port，例如 127.0.0.1:7890；留空不走代理",
+                singleLine = true
+            ) { v -> vm.updateSettings { it.copy(proxy = v) } }
+            SetDivider()
+            SetInfo(
+                title = "当前代理",
+                value = settings.proxy.trim().ifBlank { "未设置" },
+                subtitle = "支持 http:// / socks5:// 前缀，生效于下一次请求"
+            )
+        }
+
+        SetSection("HTTPS 与超时") {
+            SetSwitch(
+                title = "校验 HTTPS 证书",
+                subtitle = "自签名中转站才建议临时关掉，平时务必保持开启",
+                checked = settings.sslVerify
+            ) { v -> vm.updateSettings { it.copy(sslVerify = v) } }
+            SetDivider()
+            SetStepper(
+                title = "请求超时",
+                subtitle = "覆盖连接与读取，单位秒",
+                value = settings.requestTimeoutSec,
+                min = 10,
+                max = 600,
+                step = 10,
+                suffix = " 秒"
+            ) { v -> vm.updateSettings { it.copy(requestTimeoutSec = v) } }
         }
 
     }

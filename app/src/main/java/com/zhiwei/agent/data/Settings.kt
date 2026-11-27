@@ -5,6 +5,7 @@ import android.content.Context
 const val THEME_SYSTEM = "system"
 const val THEME_LIGHT = "light"
 const val THEME_DARK = "dark"
+const val THEME_AMOLED = "amoled"
 
 /** 工具调用在消息里的折叠方式 */
 const val COLLAPSE_NONE = "none"
@@ -160,6 +161,18 @@ data class AppSettings(
     /** 抽屉宽度占屏比 */
     val drawerRatio: Float = 0.42f,
 
+    // ---- 网络与安全 ----
+    /** HTTP 代理，格式 host:port；留空不走代理 */
+    val proxy: String = "",
+    /** 校验 HTTPS 证书；关掉只建议在自签名中转站场景临时用 */
+    val sslVerify: Boolean = true,
+    /** 单次请求超时（秒），覆盖连接与读取 */
+    val requestTimeoutSec: Int = 120,
+
+    // ---- 对话 ----
+    /** 长按气泡弹出的菜单里是否显示「编辑重发」 */
+    val enableMessageEdit: Boolean = true,
+
     // ---- 显示与行为 ----
     val showTimestamp: Boolean = false,
     val collapseMode: String = COLLAPSE_MULTI,
@@ -256,6 +269,10 @@ class SettingsStore(context: Context) {
         themeMode = sp.getString("themeMode", THEME_SYSTEM) ?: THEME_SYSTEM,
         fontScale = sp.getFloat("fontScale", 1.0f),
         drawerRatio = sp.getFloat("drawerRatio", 0.42f),
+        proxy = sp.getString("proxy", "") ?: "",
+        sslVerify = sp.getBoolean("sslVerify", true),
+        requestTimeoutSec = sp.getInt("requestTimeoutSec", 120),
+        enableMessageEdit = sp.getBoolean("enableMessageEdit", true),
         showTimestamp = sp.getBoolean("showTimestamp", false),
         collapseMode = sp.getString("collapseMode", COLLAPSE_MULTI) ?: COLLAPSE_MULTI,
         keepScreenOn = sp.getBoolean("keepScreenOn", false),
@@ -323,6 +340,10 @@ class SettingsStore(context: Context) {
             .putString("themeMode", s.themeMode)
             .putFloat("fontScale", s.fontScale)
             .putFloat("drawerRatio", s.drawerRatio)
+            .putString("proxy", s.proxy)
+            .putBoolean("sslVerify", s.sslVerify)
+            .putInt("requestTimeoutSec", s.requestTimeoutSec)
+            .putBoolean("enableMessageEdit", s.enableMessageEdit)
             .putBoolean("showTimestamp", s.showTimestamp)
             .putString("collapseMode", s.collapseMode)
             .putBoolean("keepScreenOn", s.keepScreenOn)

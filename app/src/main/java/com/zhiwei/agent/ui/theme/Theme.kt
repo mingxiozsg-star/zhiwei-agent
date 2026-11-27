@@ -71,13 +71,45 @@ private val DarkColorScheme = darkColorScheme(
     onError = Color(0xFF690005)
 )
 
+// AMOLED 纯黑：背景/表面直接压到纯黑，surfaceVariant 用深炭灰，主色保留亮粉，比普通深色更省电更不刺眼。
+private val AmoledColorScheme = darkColorScheme(
+    primary = Color(0xFFFFB1D0),
+    onPrimary = Color(0xFF5F0F35),
+    primaryContainer = Color(0xFF7C2A4C),
+    onPrimaryContainer = Color(0xFFFFD9E5),
+
+    secondary = Color(0xFF9BD4FF),
+    onSecondary = Color(0xFF003352),
+    secondaryContainer = Color(0xFF0B5C8A),
+    onSecondaryContainer = Color(0xFFD1E9FF),
+
+    tertiary = Color(0xFFD8B6FF),
+    onTertiary = Color(0xFF3F1D6E),
+    tertiaryContainer = Color(0xFF563B87),
+    onTertiaryContainer = Color(0xFFEDDDFF),
+
+    background = Color(0xFF000000),
+    onBackground = Color(0xFFECE0E6),
+    surface = Color(0xFF000000),
+    onSurface = Color(0xFFECE0E6),
+    surfaceVariant = Color(0xFF1A1A1A),
+    onSurfaceVariant = Color(0xFFC9C0C6),
+
+    outline = Color(0xFF9E8F97),
+    outlineVariant = Color(0xFF2A2A2A),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005)
+)
+
 @Composable
 fun ZhiweiAgentTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
+    amoled: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
+        amoled -> AmoledColorScheme
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
