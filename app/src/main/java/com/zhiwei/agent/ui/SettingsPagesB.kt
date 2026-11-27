@@ -91,13 +91,6 @@ fun ThemeSettingsPage(vm: ChatViewModel) {
             ) { v -> vm.updateSettings { it.copy(keepScreenOn = v) } }
         }
 
-        SetSection("外观（路线图）") {
-            SetSoon("深色 / AMOLED 纯黑", "纯黑底省电，OLED 屏尤其明显")
-            SetSoon("液态玻璃 UI", "毛玻璃卡片与高光边缘")
-            SetSoon("动效开关", "给旧机器留一个关动效的口子")
-            SetSoon("回弹动画", "列表与气泡的弹性手感")
-            SetSoon("自定义字体", "换一套字，字号单独再调")
-        }
     }
 }
 
@@ -169,10 +162,6 @@ fun ChatSettingsPage(vm: ChatViewModel) {
             )
         }
 
-        SetSection("路线图") {
-            SetSoon("消息编辑", "改完再发，不用重新打一遍")
-            SetSoon("气泡样式", "多套气泡配色与圆角可选")
-        }
     }
 
     val target = confirm
@@ -242,12 +231,6 @@ fun WorkspaceSettingsPage(vm: ChatViewModel, onNavigate: (AppScreen) -> Unit) {
             )
         }
 
-        SetSection("路线图") {
-            SetSoon("新建 / 切换 / 删除工作区", "一个项目一个工作区，互不串味")
-            SetSoon("版本快照", "改之前先打个快照，随时回滚")
-            SetSoon("代码变更对比", "改了什么、差在哪一行")
-            SetSoon("一键打包导出", "把工作区打成 zip，或者直接出 APK")
-        }
     }
 }
 
@@ -264,13 +247,7 @@ fun LinkSettingsPage(vm: ChatViewModel) {
             )
         }
 
-        SetSection("知微系列联动（路线图）") {
-            SetSoon("知微浏览器联动", "浏览器里识别的下载链接直接丢进工作区")
-            SetSoon("打开下载目录", "从对话里直接跳到文件管理器看产物")
-            SetSoon("读取本地目录", "授权一个目录，让模型按需读里面的文件")
-            SetSoon("跨应用唤起", "把任务结果送到别的应用继续处理")
         }
-    }
 }
 
 // ---------------- ⑩ 网络与安全 ----------------
@@ -290,12 +267,6 @@ fun NetSettingsPage(vm: ChatViewModel) {
             )
         }
 
-        SetSection("路线图") {
-            SetSoon("代理设置", "给请求挂 HTTP / SOCKS 代理")
-            SetSoon("SSL 校验开关", "自签证书的网关要能手动放行")
-            SetSoon("自动切换线路", "主线路不通就换备用地址重试")
-            SetSoon("请求超时", "连接、读、写三段分开调")
-        }
     }
 }
 
@@ -335,12 +306,6 @@ fun NotifySettingsPage(vm: ChatViewModel) {
             ) { openSystemNotificationSettings(context) }
         }
 
-        SetSection("路线图") {
-            SetSoon("消息推送", "长任务跑完直接推一条")
-            SetSoon("后台通知进度", "工具执行到第几步也能看见")
-            SetSoon("报错提醒", "失败时除了红字再弹一条通知")
-            SetSoon("版本更新提醒", "发现新版就提醒，一键跳下载")
-        }
     }
 }
 
@@ -373,12 +338,7 @@ fun GestureSettingsPage(vm: ChatViewModel) {
             )
         }
 
-        SetSection("路线图") {
-            SetSoon("侧边手势开关", "可以关掉侧滑，避免和系统返回手势打架")
-            SetSoon("长按菜单自定义", "自己决定长按气泡出哪些操作")
-            SetSoon("快捷指令", "给常用提示词绑一个手势或桌面快捷方式")
         }
-    }
 }
 
 // ---------------- ⑬ 关于与赞助 ----------------
@@ -562,9 +522,6 @@ fun AboutSettingsPage(vm: ChatViewModel) {
             Spacer(Modifier.height(8.dp))
         }
 
-        SetSection("赞助") {
-            SetSoon("赞助与打赏", "先不加，等核心功能做扎实再说")
-        }
     }
 }
 

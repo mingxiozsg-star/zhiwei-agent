@@ -201,12 +201,6 @@ fun ModelSettingsPage(vm: ChatViewModel) {
                 subtitle = "填了才能用联网搜索工具，不填就只能靠模型自己的知识"
             ) { v -> vm.updateSettings { it.copy(tavilyApiKey = v) } }
         }
-
-        SetSection("线路与分流（路线图）") {
-            SetSoon("多模型分流", "主文本 / 识图 / 代码按消息类型自动切模型")
-            SetSoon("多网关备用线路", "一个网关挂了自动切下一个地址")
-            SetSoon("单条对话 Token 限额", "超了就停下并提示，不闷头烧额度")
-        }
     }
 }
 
@@ -463,13 +457,6 @@ fun SkillsSettingsPage(vm: ChatViewModel, onNavigate: (AppScreen) -> Unit) {
             ) { onNavigate(AppScreen.PLUGINS) }
         }
 
-        SetSection("SKILL.md 技能包（路线图）") {
-            SetSoon("技能包格式", "一个文件夹一个技能：SKILL.md 写用法，附脚本")
-            SetSoon("技能仓库浏览", "列出仓库里的技能，看了再用")
-            SetSoon("安装技能", "从仓库或本地目录装进应用")
-            SetSoon("启用 / 禁用技能", "按需开，不用的不占提示词")
-            SetSoon("删除技能", "连文件一起清干净")
-        }
     }
 }
 
@@ -523,14 +510,6 @@ fun ToolsSettingsPage(vm: ChatViewModel) {
             SetInfo(title = "自定义插件与 MCP", value = if (settings.enablePlugins) "已开启" else "已关闭")
         }
 
-        SetSection("提权与权限（路线图）") {
-            SetSoon("Shizuku 提权通道", "借用 Shizuku 的权限跑系统级操作")
-            SetSoon("Root 提权通道", "有 root 时直接执行 su 命令")
-            SetSoon("无障碍适配", "读屏用户走系统确认框，不吃掉焦点")
-            SetSoon("高危命令拦截", "rm -rf、格式化这类命令在执行前拦下来")
-            SetSoon("文件读写权限管控", "单独限制模型能碰哪些目录")
-            SetSoon("插件权限隔离", "给每个插件单独划定可访问范围")
-        }
     }
 }
 
@@ -587,12 +566,6 @@ fun StatsSettingsPage(vm: ChatViewModel) {
                 subtitle = "只清这台手机上的累计数，不影响服务商账单",
                 label = "清空"
             ) { vm.resetStats() }
-        }
-
-        SetSection("路线图") {
-            SetSoon("消息热力图", "要按天记消息数，统计结构得先升级")
-            SetSoon("今日消耗", "按天汇总输入 / 输出 tokens")
-            SetSoon("调用日志", "每次请求的耗时、状态码、重试次数")
         }
     }
 }

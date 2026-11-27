@@ -500,42 +500,6 @@ fun SetAction(
     }
 }
 
-/** 还没做的功能如实标出来，不装作能用 */
-@Composable
-fun SetSoon(title: String, note: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        Surface(
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-        ) {
-            Text(
-                text = "开发中",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-            )
-        }
-    }
-}
-
 @Composable
 fun SetStat(label: String, value: String) {
     Column {
