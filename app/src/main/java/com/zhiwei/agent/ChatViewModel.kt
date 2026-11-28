@@ -1291,7 +1291,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _terminalBusy.value = true
         viewModelScope.launch {
             val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
-            val session = Term.ui(home)
+            val session = Term.ui(home, _settings.value)
             // 常驻会话：cd / export 都留得住，跑完把当前目录带回来
             val result = withContext(Dispatchers.IO) { session.run(cmd, timeoutMs = 60000) }
             _terminalCwd.value = result.cwd
@@ -1311,7 +1311,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 中断正在跑的命令：直接重建会话，跑飞的东西一起停 */
     fun interruptCommand() {
         val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
-        Term.ui(home).reset()
+        Term.ui(home, _settings.value).reset()
         _terminalBusy.value = false
         _terminalCwd.value = home.absolutePath
         _terminalLines.update { it + TerminalLine("^C 已中断", isError = true) }
@@ -1320,7 +1320,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 会话跑了半天状态乱了，或者 cd 到别处回不来，一键重开 */
     fun restartTerminalSession() {
         val home = ShellRunner.homeDir(getApplication<Application>().filesDir)
-        Term.ui(home).reset()
+        Term.ui(home, _settings.value).reset()
         _terminalBusy.value = false
         _terminalCwd.value = home.absolutePath
         _terminalLines.update { it + TerminalLine("# 会话已重开，回到 $home", isError = false) }

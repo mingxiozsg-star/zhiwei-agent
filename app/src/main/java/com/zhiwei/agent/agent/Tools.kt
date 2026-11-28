@@ -129,6 +129,12 @@ object ToolRegistry {
     const val TOOL_READ_FILE = "read_file"
     const val TOOL_WRITE_FILE = "write_file"
     const val TOOL_SCREENSHOT = "screenshot"
+    const val TOOL_UI_TAP = "ui_tap"
+    const val TOOL_UI_SWIPE = "ui_swipe"
+    const val TOOL_UI_TYPE = "ui_type"
+    const val TOOL_UI_KEY = "ui_key"
+    const val TOOL_UI_CLICK_TEXT = "ui_click_text"
+    const val TOOL_UI_SCREEN = "ui_read_screen"
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -337,6 +343,56 @@ object ToolRegistry {
             "截取当前手机屏幕，截好的图会直接带回对话，模型能看图作答。第一次用需要用户在系统弹窗里授权一次（应用内会弹出）。",
             schema()
         )
+        // 无障碍自动化：真正「控制整台设备」的能力，需要用户到系统无障碍设置页开启一次
+        if (settings.enableDeviceTools) {
+            list += ToolSpec(
+                TOOL_UI_TAP,
+                "点击屏幕",
+                "模拟点击屏幕上的坐标。需要先开启无障碍服务（未开启时会返回开启引导）。",
+                schema(
+                    "x" to obj("type" to "integer", "description" to "横坐标像素"),
+                    "y" to obj("type" to "integer", "description" to "纵坐标像素"),
+                    required = listOf("x", "y")
+                )
+            )
+            list += ToolSpec(
+                TOOL_UI_SWIPE,
+                "滑动屏幕",
+                "模拟从一点滑到另一点，用于翻页、下拉、手势。需要无障碍服务。",
+                schema(
+                    "x1" to obj("type" to "integer", "description" to "起点横坐标"),
+                    "y1" to obj("type" to "integer", "description" to "起点纵坐标"),
+                    "x2" to obj("type" to "integer", "description" to "终点横坐标"),
+                    "y2" to obj("type" to "integer", "description" to "终点纵坐标"),
+                    "duration_ms" to obj("type" to "integer", "description" to "滑动时长，默认 400"),
+                    required = listOf("x1", "y1", "x2", "y2")
+                )
+            )
+            list += ToolSpec(
+                TOOL_UI_TYPE,
+                "输入文字",
+                "在当前焦点输入框输入文字。需要无障碍服务，且目标输入框已获得焦点。",
+                schema("text" to str("要输入的文字"), required = listOf("text"))
+            )
+            list += ToolSpec(
+                TOOL_UI_KEY,
+                "按系统键",
+                "模拟按返回键 / 主页键 / 最近任务键。key 可选 back / home / recents。需要无障碍服务。",
+                schema("key" to str("back / home / recents"), required = listOf("key"))
+            )
+            list += ToolSpec(
+                TOOL_UI_CLICK_TEXT,
+                "按文字点击",
+                "在当前屏幕上查找指定文字的可点击控件并点击。需要无障碍服务。",
+                schema("text" to str("目标控件上的文字"), required = listOf("text"))
+            )
+            list += ToolSpec(
+                TOOL_UI_SCREEN,
+                "读屏幕控件",
+                "列出当前屏幕上所有可点击控件及其文字与中心坐标。做自动操作前先调它，能大幅提高点击命中率。",
+                schema()
+            )
+        }
 
         if (settings.tavilyApiKey.isNotBlank()) {
             list += ToolSpec(
@@ -398,6 +454,12 @@ object ToolRegistry {
         TOOL_READ_FILE -> "读文件"
         TOOL_WRITE_FILE -> "写文件"
         TOOL_SCREENSHOT -> "截屏"
+        TOOL_UI_TAP -> "点击屏幕"
+        TOOL_UI_SWIPE -> "滑动屏幕"
+        TOOL_UI_TYPE -> "输入文字"
+        TOOL_UI_KEY -> "按系统键"
+        TOOL_UI_CLICK_TEXT -> "按文字点击"
+        TOOL_UI_SCREEN -> "读屏幕控件"
         else -> env.pluginList.firstOrNull { it.safeName() == name }?.name ?: name
     }
 
@@ -421,7 +483,7 @@ object ToolRegistry {
                     TOOL_OPEN_URL -> ToolOutcome(openUrl(env.context, args.optString("url", "")))
                     TOOL_FETCH -> ToolOutcome(fetchPage(args.optString("url", "")))
                     TOOL_SEARCH -> ToolOutcome(search(env.settings, args.optString("query", "")))
-                    TOOL_SHELL -> ToolOutcome(runShell(env.context, args.optString("command", "")))
+                    TOOL_SHELL -> ToolOutcome(runShell(env.context, env.settings, args.optString("command", "")))
                     TOOL_REMEMBER -> remember(args)
                     TOOL_RECALL -> ToolOutcome(recall(env, args.optString("query", "")))
                     TOOL_KB_SEARCH -> ToolOutcome(searchKnowledge(env, args.optString("query", "")))
@@ -443,6 +505,18 @@ object ToolRegistry {
                         writeFile(env.context, args.optString("path", ""), args.optString("content", ""))
                     )
                     TOOL_SCREENSHOT -> screenshot(env.context)
+                    TOOL_UI_TAP -> ToolOutcome(uiTap(args.optInt("x", -1), args.optInt("y", -1)))
+                    TOOL_UI_SWIPE -> ToolOutcome(
+                        uiSwipe(
+                            args.optInt("x1", 0), args.optInt("y1", 0),
+                            args.optInt("x2", 0), args.optInt("y2", 0),
+                            args.optLong("duration_ms", 400)
+                        )
+                    )
+                    TOOL_UI_TYPE -> ToolOutcome(uiType(args.optString("text", "")))
+                    TOOL_UI_KEY -> ToolOutcome(uiKey(args.optString("key", "")))
+                    TOOL_UI_CLICK_TEXT -> ToolOutcome(uiClickText(args.optString("text", "")))
+                    TOOL_UI_SCREEN -> ToolOutcome(uiReadScreen())
                     else -> ToolOutcome("未知工具：$name")
                 }
             } catch (e: Exception) {
@@ -605,10 +679,13 @@ object ToolRegistry {
         val rt = Runtime.getRuntime()
         val totalMb = rt.maxMemory() / 1024 / 1024
         val freeMb = rt.freeMemory() / 1024 / 1024
+        val dm = context.resources.displayMetrics
         return buildString {
             append("机型：").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n')
             append("系统：Android ").append(Build.VERSION.RELEASE)
             append("（API ").append(Build.VERSION.SDK_INT).append("）\n")
+            append("屏幕：").append(dm.widthPixels).append(" × ").append(dm.heightPixels)
+            append(" 像素（密度 ").append(dm.densityDpi).append(" dpi）\n")
             append("电量：").append(if (level >= 0) "$level%" else "未知").append('\n')
             append("可用堆内存：约 ").append(freeMb).append(" MB / ").append(totalMb).append(" MB")
         }
@@ -682,14 +759,70 @@ object ToolRegistry {
         }
     }
 
-    private fun runShell(context: Context, command: String): String {
+    private fun runShell(context: Context, settings: AppSettings, command: String): String {
         if (command.isBlank()) return "没有提供命令"
         val home = ShellRunner.homeDir(context.filesDir)
-        val result = ShellRunner.run(command, home, timeoutMs = 20000, maxChars = 6000)
+        // 用常驻会话跑：cd / export 留得住，并且会带上用户在「终端环境配置」里写的变量与启动脚本
+        val result = Term.tool(home, settings).run(command, timeoutMs = 60000, maxChars = 6000)
         val body = result.output.trim()
         return buildString {
             if (body.isNotEmpty()) append(body) else append("（无输出）")
             append("\n[退出码 ").append(result.exitCode).append(']')
+            if (result.cwd.isNotBlank() && result.cwd != home.absolutePath) {
+                append("\n[当前目录 ").append(result.cwd).append(']')
+            }
+        }
+    }
+
+    // ---------- 无障碍自动化 ----------
+
+    private const val UI_GUIDE =
+        "无障碍服务还没开启，无法自动操作。请到 设置 → 无障碍 → 知微智能体 打开，" +
+            "或在应用内「工具与权限」页点「去开启」。"
+
+    private fun uiService(): AccessibilityAgentService? = AccessibilityAgentService.get()
+
+    private fun uiTap(x: Int, y: Int): String {
+        if (x < 0 || y < 0) return "坐标无效：x、y 不能为负数"
+        val svc = uiService() ?: return UI_GUIDE
+        return if (svc.tap(x, y)) "已点击屏幕 ($x, $y)" else "点击失败：手势派发未成功"
+    }
+
+    private fun uiSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): String {
+        val svc = uiService() ?: return UI_GUIDE
+        val d = durationMs.coerceIn(50L, 5000L)
+        return if (svc.swipe(x1, y1, x2, y2, d)) "已从 ($x1, $y1) 滑到 ($x2, $y2)" else "滑动失败"
+    }
+
+    private fun uiType(text: String): String {
+        if (text.isEmpty()) return "没有提供要输入的文字"
+        val svc = uiService() ?: return UI_GUIDE
+        return if (svc.type(text)) "已输入文字（${text.length} 字）" else "输入失败：没找到聚焦的输入框"
+    }
+
+    private fun uiKey(key: String): String {
+        val svc = uiService() ?: return UI_GUIDE
+        val ok = when (key.trim().lowercase()) {
+            "back", "返回" -> svc.back()
+            "home", "主页" -> svc.home()
+            "recents", "最近任务" -> svc.recents()
+            else -> return "不认识的键：$key（可用 back / home / recents）"
+        }
+        return if (ok) "已按下 $key" else "按键失败"
+    }
+
+    private fun uiClickText(text: String): String {
+        if (text.isEmpty()) return "没有提供要点击的文字"
+        val svc = uiService() ?: return UI_GUIDE
+        return if (svc.clickByText(text)) "已点击「$text」" else "没找到可点击的「$text」"
+    }
+
+    private fun uiReadScreen(): String {
+        val svc = uiService() ?: return UI_GUIDE
+        return try {
+            svc.dumpScreen()
+        } catch (e: Exception) {
+            "读取屏幕失败：${e.message}"
         }
     }
 

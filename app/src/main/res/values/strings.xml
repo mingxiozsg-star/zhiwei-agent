@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">知微智能体</string>
+    <string name="accessibility_service_desc">开启后，知微可以模拟点击、滑动、输入文字并读取屏幕内容，用于自动操作设备。请只在信任的场景下开启。</string>
+    <string name="accessibility_service_label">知微设备自动化</string>
 </resources>

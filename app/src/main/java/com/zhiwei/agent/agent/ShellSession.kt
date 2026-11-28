@@ -2,6 +2,7 @@ package com.zhiwei.agent.agent
 
 import java.io.File
 import java.io.OutputStream
+import com.zhiwei.agent.data.AppSettings
 
 /** 一条命令跑完的结果 */
 data class TermResult(
@@ -21,7 +22,11 @@ data class TermResult(
  * `cd`、`export`、`alias` 都留得住，跟在自己电脑上开终端没区别。
  * 每条命令跑完由哨兵行带回退出码和当前目录，用来判断有没有跑完。
  */
-class ShellSession(private val home: File) {
+class ShellSession(
+    private val home: File,
+    private val extraEnv: Map<String, String> = emptyMap(),
+    private val profile: List<String> = emptyList()
+) {
 
     private var process: Process? = null
     private var sink: OutputStream? = null
@@ -36,6 +41,10 @@ class ShellSession(private val home: File) {
     fun currentCwd(): String = cwdPath
 
     fun isAlive(): Boolean = process?.isAlive == true
+
+    /** 配置没变就不用重建会话；变了就重建，让新环境变量/启动脚本生效 */
+    fun matches(env: Map<String, String>, prof: List<String>): Boolean =
+        extraEnv == env && profile == prof
 
     /** 会话里能找到命令的目录：系统自带的优先，应用自己的 bin 兜底 */
     private fun pathEnv(): String = listOf(
@@ -66,6 +75,8 @@ class ShellSession(private val home: File) {
             this["TERM"] = "xterm-256color"
             this["SHELL"] = "sh"
             this["PWD"] = home.absolutePath
+            // 用户配置的额外变量最后写入，允许覆盖上面这些默认值
+            extraEnv.forEach { (k, v) -> this[k] = v }
         }
         val np = pb.start()
         process = np
@@ -91,6 +102,7 @@ class ShellSession(private val home: File) {
         pump.isDaemon = true
         pump.start()
         // 会话开起来先对齐环境，免得跟系统默认值不一样
+        val profileBlock = profile.joinToString("\n") { it }
         sprint(
             "cd \"${home.absolutePath}\" 2>/dev/null\n" +
                 "export PATH=\"${pathEnv()}\"\n" +
@@ -98,7 +110,8 @@ class ShellSession(private val home: File) {
                 "export TMPDIR=\"${tmp.absolutePath}\"\n" +
                 "export LANG=en_US.UTF-8\n" +
                 "export TERM=xterm-256color\n" +
-                "umask 022\n"
+                "umask 022\n" +
+                if (profileBlock.isEmpty()) "" else profileBlock + "\n"
         )
     }
 
@@ -204,17 +217,27 @@ object Term {
     private val sessions = HashMap<String, ShellSession>()
 
     @Synchronized
-    private fun of(key: String, home: File): ShellSession {
+    private fun of(
+        key: String,
+        home: File,
+        extraEnv: Map<String, String>,
+        profile: List<String>
+    ): ShellSession {
         val exist = sessions[key]
-        if (exist != null && exist.homeDir() == home.absolutePath) return exist
-        val s = ShellSession(home)
+        if (exist != null && exist.homeDir() == home.absolutePath && exist.matches(extraEnv, profile)) {
+            return exist
+        }
+        exist?.close()
+        val s = ShellSession(home, extraEnv, profile)
         sessions[key] = s
         return s
     }
 
     /** 用户在终端页里用的会话 */
-    fun ui(home: File): ShellSession = of("ui", home)
+    fun ui(home: File, settings: AppSettings): ShellSession =
+        of("ui", home, settings.terminalEnv(), settings.terminalProfile())
 
     /** 模型通过「终端命令」工具用的会话，跟界面上的分开，避免互相打断 */
-    fun tool(home: File): ShellSession = of("tool", home)
+    fun tool(home: File, settings: AppSettings): ShellSession =
+        of("tool", home, settings.terminalEnv(), settings.terminalProfile())
 }

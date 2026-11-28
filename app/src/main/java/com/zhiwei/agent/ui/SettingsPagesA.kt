@@ -18,7 +18,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,13 +30,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.ChatViewModel
+import com.zhiwei.agent.agent.AccessibilityAgentService
 import com.zhiwei.agent.data.DEFAULT_SYSTEM_PROMPT
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 // ---------------- ① 模型与 API ----------------
 
@@ -465,6 +472,20 @@ fun SkillsSettingsPage(vm: ChatViewModel, onNavigate: (AppScreen) -> Unit) {
 @Composable
 fun ToolsSettingsPage(vm: ChatViewModel) {
     val settings by vm.settings.collectAsState()
+    val context = LocalContext.current
+    var uiEnabled by remember {
+        mutableStateOf(AccessibilityAgentService.isEnabled(context))
+    }
+    var writeEnabled by remember { mutableStateOf(Settings.System.canWrite(context)) }
+
+    // 权限是在系统设置里改的，回到本页后轮询一次状态，避免一直显示旧值
+    LaunchedEffect(Unit) {
+        while (true) {
+            uiEnabled = AccessibilityAgentService.isEnabled(context)
+            writeEnabled = Settings.System.canWrite(context)
+            delay(1200)
+        }
+    }
 
     SetPage {
         SetSection("内置工具总开关") {
@@ -496,12 +517,69 @@ fun ToolsSettingsPage(vm: ChatViewModel) {
             ) { v -> vm.updateSettings { it.copy(toolMaxRounds = v) } }
         }
 
+        SetSection("设备自动化权限") {
+            SetInfo(
+                title = "无障碍服务",
+                value = if (uiEnabled) "已开启" else "未开启",
+                subtitle = "开启后可使用点击、滑动、输入、返回等自动操作工具"
+            )
+            SetDivider()
+            SetAction(
+                title = if (uiEnabled) "重新打开无障碍设置" else "去开启无障碍服务",
+                subtitle = "设置 → 无障碍 → 已下载的应用 → 知微智能体",
+                label = if (uiEnabled) "设置" else "去开启"
+            ) { AccessibilityAgentService.openSettings(context) }
+            SetDivider()
+            SetInfo(
+                title = "修改系统设置",
+                value = if (writeEnabled) "已授权" else "未授权",
+                subtitle = "调亮度需要它；其余设备工具不需要"
+            )
+            SetDivider()
+            SetAction(
+                title = if (writeEnabled) "重新打开授权页" else "去授权修改系统设置",
+                subtitle = "设置 → 应用 → 知微智能体 → 修改系统设置",
+                label = if (writeEnabled) "设置" else "去授权"
+            ) {
+                runCatching {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                        Uri.parse("package:" + context.packageName)
+                    )
+                    context.startActivity(intent)
+                }
+            }
+        }
+
+        SetSection("终端环境配置") {
+            SetTextField(
+                title = "额外环境变量",
+                value = settings.terminalEnvRaw,
+                subtitle = "每行 KEY=VALUE，会话启动时注入；可覆盖 PATH 等默认值",
+                singleLine = false,
+                minLines = 3
+            ) { v -> vm.updateSettings { it.copy(terminalEnvRaw = v) } }
+            SetDivider()
+            SetTextField(
+                title = "启动脚本",
+                value = settings.terminalProfileRaw,
+                subtitle = "每行一条 shell 命令，会话建立时自动执行；改完下次跑命令生效",
+                singleLine = false,
+                minLines = 4
+            ) { v -> vm.updateSettings { it.copy(terminalProfileRaw = v) } }
+        }
+
         SetSection("工具清单") {
             SetInfo(title = "读文件 / 写文件 / 列目录", value = "已上线")
             SetDivider()
             SetInfo(title = "截屏", value = "已上线（首次用需授权一次）")
             SetDivider()
             SetInfo(title = "终端命令（沙箱）", value = if (settings.enableShellTool) "已开启" else "已关闭")
+            SetDivider()
+            SetInfo(
+                title = "点击 / 滑动 / 输入 / 系统键 / 按文字点击",
+                value = if (uiEnabled) "已上线" else "待开启无障碍"
+            )
             SetDivider()
             SetInfo(title = "设备信息 / 计算器 / 时间", value = "已上线（不占工具预算）")
             SetDivider()

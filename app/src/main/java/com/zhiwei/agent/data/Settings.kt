@@ -182,7 +182,13 @@ data class AppSettings(
     /** 常用模型：收藏后直接出现在聊天页的模型列表里，一行一个 */
     val favoriteModelsRaw: String = "",
     /** 更新包下载优先走加速镜像（GitHub 直连在国内经常断） */
-    val mirrorFirst: Boolean = true
+    val mirrorFirst: Boolean = true,
+
+    // ---- 终端 ----
+    /** 终端额外环境变量：每行 KEY=VALUE，会话启动时注入 */
+    val terminalEnvRaw: String = "",
+    /** 终端启动脚本：每行一条 shell 命令，会话建立时自动执行 */
+    val terminalProfileRaw: String = ""
 ) {
     /** 解析收藏的模型名 */
     fun favoriteModels(): List<String> = favoriteModelsRaw
@@ -190,6 +196,24 @@ data class AppSettings(
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .distinct()
+
+    /** 终端额外环境变量：解析成 KEY -> VALUE 的 map，忽略非法行 */
+    fun terminalEnv(): Map<String, String> = terminalEnvRaw
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
+        .associate { line ->
+            val i = line.indexOf('=')
+            line.substring(0, i).trim() to line.substring(i + 1).trim()
+        }
+        .filterKeys { it.isNotEmpty() }
+
+    /** 终端启动脚本：每行一条命令，忽略空行与注释 */
+    fun terminalProfile(): List<String> = terminalProfileRaw
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .toList()
     /** 补全成完整的 chat/completions 地址 */
     fun endpoint(): String {
         var base = baseUrl.trim()
@@ -279,7 +303,9 @@ class SettingsStore(context: Context) {
         notifyOnDone = sp.getBoolean("notifyOnDone", false),
         hapticOnSend = sp.getBoolean("hapticOnSend", true),
         favoriteModelsRaw = sp.getString("favoriteModelsRaw", "") ?: "",
-        mirrorFirst = sp.getBoolean("mirrorFirst", true)
+        mirrorFirst = sp.getBoolean("mirrorFirst", true),
+        terminalEnvRaw = sp.getString("terminalEnvRaw", "") ?: "",
+        terminalProfileRaw = sp.getString("terminalProfileRaw", "") ?: ""
     )
 
     /**
@@ -351,6 +377,8 @@ class SettingsStore(context: Context) {
             .putBoolean("hapticOnSend", s.hapticOnSend)
             .putString("favoriteModelsRaw", s.favoriteModelsRaw)
             .putBoolean("mirrorFirst", s.mirrorFirst)
+            .putString("terminalEnvRaw", s.terminalEnvRaw)
+            .putString("terminalProfileRaw", s.terminalProfileRaw)
             .apply()
     }
 }
