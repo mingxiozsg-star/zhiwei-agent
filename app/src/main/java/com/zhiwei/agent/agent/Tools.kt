@@ -128,6 +128,12 @@ object ToolRegistry {
     const val TOOL_LIST_DIR = "list_dir"
     const val TOOL_READ_FILE = "read_file"
     const val TOOL_WRITE_FILE = "write_file"
+    const val TOOL_APPEND_FILE = "append_file"
+    const val TOOL_MAKE_DIR = "make_dir"
+    const val TOOL_DELETE_PATH = "delete_path"
+    const val TOOL_MOVE_PATH = "move_path"
+    const val TOOL_COPY_PATH = "copy_path"
+    const val TOOL_FILE_INFO = "file_info"
     const val TOOL_SCREENSHOT = "screenshot"
     const val TOOL_UI_TAP = "ui_tap"
     const val TOOL_UI_SWIPE = "ui_swipe"
@@ -339,6 +345,58 @@ object ToolRegistry {
             )
         )
         list += ToolSpec(
+            TOOL_APPEND_FILE,
+            "追加文件",
+            "往工作区已有文件末尾追加文本（不覆盖原内容）。文件不存在时自动创建。写长文本分多次写、或给日志追加时用它。",
+            schema(
+                "path" to str("文件路径"),
+                "content" to str("要追加的文本"),
+                required = listOf("path", "content")
+            )
+        )
+        list += ToolSpec(
+            TOOL_MAKE_DIR,
+            "建目录",
+            "在工作区创建目录，父目录不存在会一并创建（相当于 mkdir -p）。已存在就直接返回成功。",
+            schema("path" to str("目录路径"), required = listOf("path"))
+        )
+        list += ToolSpec(
+            TOOL_DELETE_PATH,
+            "删除",
+            "删除工作区里的文件或目录。删目录时默认连内容一起删（recursive 默认 true）。删完会用 list_dir 复查一次，确认真的没了。",
+            schema(
+                "path" to str("文件或目录路径"),
+                "recursive" to obj("type" to "boolean", "description" to "删目录时是否连内容一起删，默认 true"),
+                required = listOf("path")
+            )
+        )
+        list += ToolSpec(
+            TOOL_MOVE_PATH,
+            "移动/重命名",
+            "把工作区里的文件或目录移到另一个路径；同目录内换名字就是重命名。目标存在会报错，不覆盖。",
+            schema(
+                "from" to str("原路径"),
+                "to" to str("目标路径"),
+                required = listOf("from", "to")
+            )
+        )
+        list += ToolSpec(
+            TOOL_COPY_PATH,
+            "复制",
+            "复制工作区里的文件或目录（目录递归复制）。目标存在会报错，不覆盖。",
+            schema(
+                "from" to str("原路径"),
+                "to" to str("目标路径"),
+                required = listOf("from", "to")
+            )
+        )
+        list += ToolSpec(
+            TOOL_FILE_INFO,
+            "查路径详情",
+            "查看某个路径是否存在、是文件还是目录、大小、可读可写与最后修改时间。动手前先查一眼，比猜可靠。",
+            schema("path" to str("文件或目录路径"), required = listOf("path"))
+        )
+        list += ToolSpec(
             TOOL_SCREENSHOT,
             "截屏",
             "截取当前手机屏幕，截好的图会直接带回对话，模型能看图作答。第一次用需要用户在系统弹窗里授权一次（应用内会弹出）。",
@@ -463,6 +521,12 @@ object ToolRegistry {
         TOOL_LIST_DIR -> "列目录"
         TOOL_READ_FILE -> "读文件"
         TOOL_WRITE_FILE -> "写文件"
+        TOOL_APPEND_FILE -> "追加文件"
+        TOOL_MAKE_DIR -> "建目录"
+        TOOL_DELETE_PATH -> "删除"
+        TOOL_MOVE_PATH -> "移动/重命名"
+        TOOL_COPY_PATH -> "复制"
+        TOOL_FILE_INFO -> "查路径详情"
         TOOL_SCREENSHOT -> "截屏"
         TOOL_UI_TAP -> "点击屏幕"
         TOOL_UI_SWIPE -> "滑动屏幕"
@@ -515,6 +579,20 @@ object ToolRegistry {
                     TOOL_WRITE_FILE -> ToolOutcome(
                         writeFile(env.context, args.optString("path", ""), args.optString("content", ""))
                     )
+                    TOOL_APPEND_FILE -> ToolOutcome(
+                        appendFile(env.context, args.optString("path", ""), args.optString("content", ""))
+                    )
+                    TOOL_MAKE_DIR -> ToolOutcome(makeDir(env.context, args.optString("path", "")))
+                    TOOL_DELETE_PATH -> ToolOutcome(
+                        deletePath(env.context, args.optString("path", ""), args.optBoolean("recursive", true))
+                    )
+                    TOOL_MOVE_PATH -> ToolOutcome(
+                        movePath(env.context, args.optString("from", ""), args.optString("to", ""))
+                    )
+                    TOOL_COPY_PATH -> ToolOutcome(
+                        copyPath(env.context, args.optString("from", ""), args.optString("to", ""))
+                    )
+                    TOOL_FILE_INFO -> ToolOutcome(fileInfo(env.context, args.optString("path", "")))
                     TOOL_SCREENSHOT -> screenshot(env.context)
                     TOOL_UI_TAP -> ToolOutcome(uiTap(args.optInt("x", -1), args.optInt("y", -1)))
                     TOOL_UI_SWIPE -> ToolOutcome(
@@ -1011,6 +1089,131 @@ object ToolRegistry {
             "已写入 ${f.absolutePath}（${content.length} 字）"
         } catch (e: Exception) {
             "写入失败：${e.message}"
+        }
+    }
+
+    /** 工作区绝对路径；越界（跑到工作区外）时直接拦住，避免模型乱删应用私有数据 */
+    private fun guardInWorkspace(context: Context, f: File): String? {
+        val home = ShellRunner.homeDir(context.filesDir).canonicalFile
+        val target = f.canonicalFile
+        val inHome = target.path == home.path || target.path.startsWith(home.path + File.separator)
+        if (!inHome) return "只能操作工作区内的路径（当前工作区：${home.absolutePath}）"
+        // 工作区根本身不允许删
+        if (target.path == home.path) return "不能删除或移动工作区根目录"
+        return null
+    }
+
+    private fun appendFile(context: Context, path: String, content: String): String {
+        if (path.isBlank()) return "没有提供文件路径"
+        val f = resolveInWorkspace(context, path)
+        return try {
+            f.parentFile?.mkdirs()
+            f.appendText(content)
+            "已追加到 ${f.absolutePath}（+${content.length} 字，现共 ${f.length()} 字节）"
+        } catch (e: Exception) {
+            "追加失败：${e.message}"
+        }
+    }
+
+    private fun makeDir(context: Context, path: String): String {
+        if (path.isBlank()) return "没有提供目录路径"
+        val f = resolveInWorkspace(context, path)
+        if (f.isDirectory) return "目录已存在：${f.absolutePath}"
+        if (f.exists()) return "这个路径上已经有个文件了，不能当目录：${f.absolutePath}"
+        return try {
+            if (f.mkdirs()) {
+                "已创建目录 ${f.absolutePath}"
+            } else {
+                // mkdirs 返回 false 但也许别处已建好，复查一次再下定论
+                if (f.isDirectory) "目录已存在：${f.absolutePath}"
+                else "建目录失败：${f.absolutePath}（父目录不可写？）"
+            }
+        } catch (e: Exception) {
+            "建目录失败：${e.message}"
+        }
+    }
+
+    private fun deletePath(context: Context, path: String, recursive: Boolean): String {
+        if (path.isBlank()) return "没有提供路径"
+        val f = resolveInWorkspace(context, path)
+        guardInWorkspace(context, f)?.let { return it }
+        if (!f.exists()) return "路径不存在，无需删除：${f.absolutePath}"
+        val wasDir = f.isDirectory
+        val count = if (wasDir) (f.listFiles()?.size ?: 0) else 0
+        try {
+            if (wasDir && recursive) f.deleteRecursively() else f.delete()
+        } catch (e: Exception) {
+            return "删除失败：${e.message}"
+        }
+        // 删完复查，不靠返回值猜
+        if (f.exists()) {
+            return if (wasDir && !recursive && count > 0)
+                "目录非空，未删除：${f.absolutePath}（想连内容一起删就把 recursive 设为 true）"
+            else "删除失败：${f.absolutePath}（可能被占用或权限不足）"
+        }
+        return if (wasDir) "已删除目录 ${f.absolutePath}（含 $count 项）" else "已删除文件 ${f.absolutePath}"
+    }
+
+    private fun movePath(context: Context, from: String, to: String): String {
+        if (from.isBlank() || to.isBlank()) return "需要同时提供 from 和 to"
+        val src = resolveInWorkspace(context, from)
+        val dst = resolveInWorkspace(context, to)
+        guardInWorkspace(context, src)?.let { return "源路径：$it" }
+        guardInWorkspace(context, dst)?.let { return "目标路径：$it" }
+        if (!src.exists()) return "源路径不存在：${src.absolutePath}"
+        if (dst.exists()) return "目标已存在，不覆盖：${dst.absolutePath}"
+        return try {
+            dst.parentFile?.mkdirs()
+            if (src.renameTo(dst)) "已移动 ${src.absolutePath} → ${dst.absolutePath}"
+            else "移动失败：${src.absolutePath} → ${dst.absolutePath}"
+        } catch (e: Exception) {
+            "移动失败：${e.message}"
+        }
+    }
+
+    private fun copyPath(context: Context, from: String, to: String): String {
+        if (from.isBlank() || to.isBlank()) return "需要同时提供 from 和 to"
+        val src = resolveInWorkspace(context, from)
+        val dst = resolveInWorkspace(context, to)
+        guardInWorkspace(context, dst)?.let { return "目标路径：$it" }
+        if (!src.exists()) return "源路径不存在：${src.absolutePath}"
+        if (dst.exists()) return "目标已存在，不覆盖：${dst.absolutePath}"
+        return try {
+            val counter = longArrayOf(0L)
+            fun walk(a: File, b: File) {
+                if (a.isDirectory) {
+                    b.mkdirs()
+                    a.listFiles()?.forEach { walk(it, File(b, it.name)) }
+                } else {
+                    b.parentFile?.mkdirs()
+                    a.inputStream().use { i -> b.outputStream().use { o -> i.copyTo(o) } }
+                    counter[0]++
+                }
+            }
+            walk(src, dst)
+            "已复制 ${src.absolutePath} → ${dst.absolutePath}（${counter[0]} 个文件）"
+        } catch (e: Exception) {
+            "复制失败：${e.message}"
+        }
+    }
+
+    private fun fileInfo(context: Context, path: String): String {
+        val f = resolveInWorkspace(context, path)
+        if (!f.exists()) return "不存在：${f.absolutePath}"
+        val kind = if (f.isDirectory) "目录" else "文件"
+        return buildString {
+            append(f.absolutePath).append('
+')
+            append("类型：").append(kind).append('
+')
+            if (!f.isDirectory) append("大小：").append(humanSize(f.length())).append("（").append(f.length()).append(" 字节）
+")
+            else append("内含：").append(f.listFiles()?.size ?: 0).append(" 项
+")
+            append("可读：").append(if (f.canRead()) "是" else "否")
+            append("　可写：").append(if (f.canWrite()) "是" else "否").append('
+')
+            append("最后修改：").append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(f.lastModified())))
         }
     }
 

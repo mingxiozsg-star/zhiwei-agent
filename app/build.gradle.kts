@@ -16,8 +16,8 @@ android {
         applicationId = "com.zhiwei.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.9.1"
+        versionCode = 15
+        versionName = "1.9.2"
         // 内置 Linux 的 proot 只有 arm64-v8a 二进制，其它 ABI 打进去也跑不起来
         ndk {
             abiFilters += listOf("arm64-v8a")
