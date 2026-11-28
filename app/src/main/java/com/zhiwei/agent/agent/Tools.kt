@@ -1202,18 +1202,18 @@ object ToolRegistry {
         if (!f.exists()) return "不存在：${f.absolutePath}"
         val kind = if (f.isDirectory) "目录" else "文件"
         return buildString {
-            append(f.absolutePath).append('
-')
-            append("类型：").append(kind).append('
-')
-            if (!f.isDirectory) append("大小：").append(humanSize(f.length())).append("（").append(f.length()).append(" 字节）
-")
-            else append("内含：").append(f.listFiles()?.size ?: 0).append(" 项
-")
+            append(f.absolutePath).append('\n')
+            append("类型：").append(kind).append('\n')
+            if (!f.isDirectory) {
+                append("大小：").append(humanSize(f.length()))
+                    .append("（").append(f.length()).append(" 字节）\n")
+            } else {
+                append("内含：").append(f.listFiles()?.size ?: 0).append(" 项\n")
+            }
             append("可读：").append(if (f.canRead()) "是" else "否")
-            append("　可写：").append(if (f.canWrite()) "是" else "否").append('
-')
-            append("最后修改：").append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(f.lastModified())))
+            append("　可写：").append(if (f.canWrite()) "是" else "否").append('\n')
+            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+            append("最后修改：").append(fmt.format(java.util.Date(f.lastModified())))
         }
     }
 
