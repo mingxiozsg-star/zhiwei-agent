@@ -135,6 +135,7 @@ object ToolRegistry {
     const val TOOL_UI_KEY = "ui_key"
     const val TOOL_UI_CLICK_TEXT = "ui_click_text"
     const val TOOL_UI_SCREEN = "ui_read_screen"
+    const val TOOL_PRIV = "check_privilege"
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -394,14 +395,19 @@ object ToolRegistry {
             )
         }
 
-        if (settings.tavilyApiKey.isNotBlank()) {
-            list += ToolSpec(
-                TOOL_SEARCH,
-                "联网搜索",
-                "用搜索引擎检索实时信息，返回若干条结果摘要。",
-                schema("query" to str("搜索关键词"), required = listOf("query"))
-            )
-        }
+        // 联网搜索始终可用：配了 Tavily Key 就用 Tavily，没配就走内置的必应 RSS 通道
+        list += ToolSpec(
+            TOOL_SEARCH,
+            "联网搜索",
+            "用搜索引擎检索实时信息，返回若干条结果摘要（标题 / 链接 / 摘要）。",
+            schema("query" to str("搜索关键词"), required = listOf("query"))
+        )
+        list += ToolSpec(
+            TOOL_PRIV,
+            "查权限通道",
+            "查看当前能用的命令执行通道（沙箱 / Shizuku / Root）与授权状态，含屏幕自动化是否开启。",
+            schema()
+        )
 
         if (settings.enableShellTool) {
             list += ToolSpec(
@@ -460,6 +466,7 @@ object ToolRegistry {
         TOOL_UI_KEY -> "按系统键"
         TOOL_UI_CLICK_TEXT -> "按文字点击"
         TOOL_UI_SCREEN -> "读屏幕控件"
+        TOOL_PRIV -> "查权限通道"
         else -> env.pluginList.firstOrNull { it.safeName() == name }?.name ?: name
     }
 
@@ -517,6 +524,7 @@ object ToolRegistry {
                     TOOL_UI_KEY -> ToolOutcome(uiKey(args.optString("key", "")))
                     TOOL_UI_CLICK_TEXT -> ToolOutcome(uiClickText(args.optString("text", "")))
                     TOOL_UI_SCREEN -> ToolOutcome(uiReadScreen())
+                    TOOL_PRIV -> ToolOutcome(privStatus(env))
                     else -> ToolOutcome("未知工具：$name")
                 }
             } catch (e: Exception) {
@@ -732,9 +740,18 @@ object ToolRegistry {
 
     private fun search(settings: AppSettings, query: String): String {
         if (query.isBlank()) return "没有提供关键词"
-        if (settings.tavilyApiKey.isBlank()) return "未配置搜索 API Key"
+        // 配了 Key 走 Tavily（质量最好），没配就走内置必应 RSS —— 两条都能用，不再要求用户必须先申请 Key
+        if (settings.tavilyApiKey.isNotBlank()) {
+            val rich = searchTavily(settings.tavilyApiKey, query)
+            if (!rich.startsWith("搜索失败")) return rich
+        }
+        return searchBing(query)
+    }
+
+    /** Tavily 通道：需要 Key，摘要质量高 */
+    private fun searchTavily(key: String, query: String): String {
         val payload = obj(
-            "api_key" to settings.tavilyApiKey,
+            "api_key" to key,
             "query" to query,
             "max_results" to 5,
             "search_depth" to "basic"
@@ -743,27 +760,101 @@ object ToolRegistry {
             .url("https://api.tavily.com/search")
             .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
-        http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) return "搜索失败：HTTP ${resp.code} $text"
-            val json = JSONObject(text)
-            val results = json.optJSONArray("results") ?: return "没有搜索结果"
-            val sb = StringBuilder()
-            for (i in 0 until minOf(results.length(), 5)) {
-                val item = results.optJSONObject(i) ?: continue
-                sb.append(i + 1).append(". ").append(item.optString("title", "")).append('\n')
-                sb.append(item.optString("url", "")).append('\n')
-                sb.append(item.optString("content", "").take(500)).append("\n\n")
+        return try {
+            http.newCall(request).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) return "搜索失败：HTTP ${resp.code} ${text.take(200)}"
+                val results = JSONObject(text).optJSONArray("results") ?: return "搜索失败：没有结果字段"
+                val sb = StringBuilder()
+                for (i in 0 until minOf(results.length(), 5)) {
+                    val item = results.optJSONObject(i) ?: continue
+                    sb.append(i + 1).append(". ").append(item.optString("title", "")).append('\n')
+                    sb.append(item.optString("url", "")).append('\n')
+                    sb.append(item.optString("content", "").take(500)).append("\n\n")
+                }
+                sb.toString().ifBlank { "搜索失败：结果为空" }
             }
-            return sb.toString().ifBlank { "没有搜索结果" }
+        } catch (e: Exception) {
+            "搜索失败：${e.message}"
         }
+    }
+
+    /**
+     * 内置搜索通道：必应 RSS。
+     *
+     * 选它的理由很实在 —— 返回结构化 XML，不用对着 HTML 抠 class 名，
+     * 也不会因为页面改版就整体失效；不需要任何 Key，装上就能用。
+     */
+    private fun searchBing(query: String): String {
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        val request = Request.Builder()
+            .url("https://cn.bing.com/search?q=$encoded&format=rss&count=8")
+            .header("User-Agent", UA)
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            .get()
+            .build()
+        return try {
+            http.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return "搜索失败：HTTP ${resp.code}"
+                val xml = resp.body?.string() ?: return "搜索失败：响应为空"
+                val items = Regex("<item>(.*?)</item>", RegexOption.DOT_MATCHES_ALL)
+                    .findAll(xml)
+                    .take(6)
+                    .map { m -> m.groupValues[1] }
+                    .toList()
+                if (items.isEmpty()) return "没有搜到「$query」的结果"
+                buildString {
+                    items.forEachIndexed { i, raw ->
+                        val title = tag(raw, "title")
+                        val link = tag(raw, "link")
+                        val desc = tag(raw, "description")
+                        if (title.isBlank() && link.isBlank()) return@forEachIndexed
+                        append(i + 1).append(". ").append(title).append('\n')
+                        if (link.isNotBlank()) append(link).append('\n')
+                        if (desc.isNotBlank()) append(desc.take(400)).append('\n')
+                        append('\n')
+                    }
+                    append("（内置必应搜索；需要更细的长文摘要可在设置里填 Tavily Key）")
+                }
+            }
+        } catch (e: Exception) {
+            "搜索失败：${e.message}"
+        }
+    }
+
+    private fun tag(xml: String, name: String): String {
+        val m = Regex("<$name>(.*?)</$name>", RegexOption.DOT_MATCHES_ALL).find(xml) ?: return ""
+        return m.groupValues[1]
+            .replace("<![CDATA[", "").replace("]]>", "")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&amp;", "&").replace("&#39;", "'")
+            .replace("&quot;", "\"")
+            .trim()
+    }
+
+    /** 把当前特权通道摊开给模型看，免得它瞎试权限 */
+    private fun privStatus(env: AgentEnv): String = buildString {
+        append("【命令执行通道】\n")
+        append(Priv.statusText(env.context))
+        append("\n\n当前设置：").append(env.settings.shellMode().label)
+        append("（实际生效：").append(Priv.resolve(env.context, env.settings.shellMode()).label).append("）")
+        append("\n\n【屏幕自动化】")
+        append(
+            if (AccessibilityAgentService.isEnabled(env.context)) {
+                "无障碍已开启，可用 ui_tap / ui_swipe / ui_type / ui_key / ui_click_text / ui_read_screen"
+            } else {
+                "无障碍未开启，屏幕类工具不可用（设置 → 工具与权限 → 去开启）"
+            }
+        )
+        append("\n【搜索】")
+        append(if (env.settings.tavilyApiKey.isNotBlank()) "Tavily（已配 Key）" else "内置必应（无需 Key）")
     }
 
     private fun runShell(context: Context, settings: AppSettings, command: String): String {
         if (command.isBlank()) return "没有提供命令"
         val home = ShellRunner.homeDir(context.filesDir)
         // 用常驻会话跑：cd / export 留得住，并且会带上用户在「终端环境配置」里写的变量与启动脚本
-        val result = Term.tool(home, settings).run(command, timeoutMs = 60000, maxChars = 6000)
+        val result = Term.tool(home, settings, context).run(command, timeoutMs = 60000, maxChars = 6000)
         val body = result.output.trim()
         return buildString {
             if (body.isNotEmpty()) append(body) else append("（无输出）")

@@ -1,28 +1,29 @@
 ## 中文
 
-v1.8.0 给 AI 补上了「手」和「眼睛」——它现在能真的替你操作屏幕。
+v1.9.0 把 AI 的手伸出了沙箱——它现在可以借 Root 或 Shizuku 的权限执行命令，真正操控整台设备。
 
-**设备自动化（需开启无障碍服务）**
+**命令执行通道**
 
-新增 6 个工具：读屏幕控件、点击坐标、滑动、输入文字、按返回/主页/最近任务、按文字点击控件。
+设置 →「工具与权限」新增「命令执行通道」一栏：
 
-模型看不见你的屏幕，靠猜坐标基本点不中，所以第一步是 `ui_read_screen`：它把当前窗口里所有可点击的控件连同文字和中心坐标一起列出来，模型照着点，命中率比盲猜高一个数量级。
+- 四档可选：自动 / 沙箱 / Shizuku / Root
+- 自动按 Root → Shizuku → 沙箱顺位降级，选错了不会硬失败，只会往下掉一级
+- 实时显示 Root 与 Shizuku 的检测结果和当前真正生效的通道
+- 「申请 Shizuku 授权」直接弹授权框；「重新检测通道」清掉探测缓存重来一次
 
-无 root 环境下这是能拿到的最高控制权。服务必须在系统「无障碍」设置里手动开启，应用不会、也无法自己打开。
+Root 通道只在真的拿到 `uid=0` 时才认，探测时同时试 `su -c id` 与 `su 0 id` 两种形式，都会失败就当没有 root，不假装成功。结果缓存起来，不会每条命令都去敲一遍 su。
 
-**权限入口用起来不费劲**
+**AI 能自查权限**
 
-设置 →「工具与权限」新增「设备自动化权限」一栏：
+新增工具 `check_privilege`，把三条通道的可用状态、当前设置与实际生效通道、屏幕自动化是否开启、搜索走的哪条线一次性摊开给模型。它不用再靠猜来试权限，也不会在沙箱里反复撞墙。
 
-- 无障碍服务与「修改系统设置」的授权状态实时显示，改完回到本页立刻同步
-- 每项后面一个按钮，直接跳到对应的系统页面，不用自己翻设置
-- 工具清单里也能看到自动操作工具当前是「已上线」还是「待开启无障碍」
+**内置网络搜索，不用再填 Key**
 
-**终端配置真正生效到 AI 手上**
+`web_search` 原本要自备 Tavily Key 才会注册，现在改为始终可用：没填 Key 时走内置必应搜索，填了就优先走 Tavily（长文摘要更细），Tavily 失败自动回落必应。装上就能搜。
 
-上一版加的「终端环境配置」只有你在终端页里跑命令才用得上。这一版 AI 调「终端命令」工具时走的是同一条常驻会话，`cd`、`export` 和你写的环境变量、启动脚本全部继承，AI 跑完还会把当前目录带回来。
+**终端工具接上强权限**
 
-另外设备信息工具补了屏幕分辨率与像素密度，AI 要算点击坐标时不用再瞎估。
+开启「沙箱终端工具」后，模型调「终端命令」时会走上面选的通道，会话依然是常驻的，`cd`、`export` 和你写的环境变量、启动脚本全部继承。Root 通道下它看到的就是 `uid=0`，能读系统目录、改系统属性、调 `pm` / `am` / `settings`。
 
 **下载**
 
@@ -35,29 +36,30 @@ v1.8.0 给 AI 补上了「手」和「眼睛」——它现在能真的替你操
 
 ## English
 
-v1.8.0 gives the agent hands and eyes — it can now actually operate the screen for you.
+v1.9.0 reaches past the sandbox — the agent can now run commands through Root or Shizuku and genuinely drive the whole device.
 
-**Device automation (requires the accessibility service)**
+**Command execution channel**
 
-Six new tools: read on-screen widgets, tap a coordinate, swipe, type text, press back / home / recents, and tap a widget by its text.
+Settings → **Tools & permissions** gains a **Command channel** block:
 
-The model cannot see your screen, and guessing coordinates mostly misses. So step one is `ui_read_screen`: it lists every clickable widget in the current window along with its label and centre coordinates. The model taps from that list, which lands far more often than blind guessing.
+- Four options: auto / sandbox / Shizuku / root
+- Auto falls back root → Shizuku → sandbox, so a wrong pick degrades one level instead of failing hard
+- Live status for root and Shizuku detection, plus which channel is actually in effect
+- **Request Shizuku permission** pops the authorisation dialog; **Re-probe channels** clears the cache and re-checks
 
-Without root this is the strongest control an app can get. The service must be enabled by hand in system **Accessibility** settings — the app will not and cannot turn it on itself.
+The root channel counts only when it really gets `uid=0`. Probing tries both `su -c id` and `su 0 id`, and treats two failures as "no root" rather than pretending otherwise. The result is cached, so it does not knock on `su` for every single command.
 
-**Permissions, without the scavenger hunt**
+**The agent can check its own reach**
 
-Settings → **Tools & permissions** gains a **Device automation** block:
+A new `check_privilege` tool lays out the status of all three channels, the configured versus effective channel, whether screen automation is on, and which search backend is in use. No more guessing at permissions or bouncing off sandbox walls.
 
-- Live status for the accessibility service and "modify system settings", refreshed as soon as you come back from the system page
-- One button per row that deep-links straight to the matching system screen
-- The tool list now shows whether the automation tools are live or still waiting on accessibility
+**Built-in web search, no key required**
 
-**Terminal config now reaches the model too**
+`web_search` used to register only when a Tavily key was present. It is now always available: with no key it uses built-in Bing, with a key Tavily takes priority for longer snippets, and a Tavily failure falls back to Bing automatically.
 
-The terminal environment config added last version only applied to commands you typed in the terminal page. The model's shell-command tool now shares the same persistent session, so `cd`, `export`, your environment variables and your startup script all carry over — and it reports the working directory back when it finishes.
+**The shell tool now inherits real privileges**
 
-Device info also gained screen resolution and density, so the agent no longer has to guess when computing tap coordinates.
+With the sandbox shell tool enabled, the model's shell commands run through whichever channel you picked, still in the persistent session — `cd`, `export`, your environment variables and startup script all carry over. Under root it sees `uid=0` and can read system directories, set properties, and drive `pm` / `am` / `settings`.
 
 **Download**
 

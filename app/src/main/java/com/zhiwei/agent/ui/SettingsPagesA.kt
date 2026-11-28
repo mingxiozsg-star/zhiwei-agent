@@ -35,6 +35,10 @@ import androidx.compose.ui.unit.dp
 import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.agent.AccessibilityAgentService
+import com.zhiwei.agent.agent.Priv
+import com.zhiwei.agent.agent.RootShell
+import com.zhiwei.agent.agent.ShizukuShell
+import com.zhiwei.agent.agent.ShellMode
 import com.zhiwei.agent.data.DEFAULT_SYSTEM_PROMPT
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -548,6 +552,58 @@ fun ToolsSettingsPage(vm: ChatViewModel) {
                     )
                     context.startActivity(intent)
                 }
+            }
+        }
+
+        SetSection("命令执行通道") {
+            SetChipPicker(
+                title = "通道",
+                subtitle = "决定模型跑命令时借谁的权限；选了但不可用会自动回落到下一级",
+                selected = settings.shellModeRaw,
+                options = ShellMode.entries.map { it.key to it.label },
+                onSelect = { v -> vm.updateSettings { it.copy(shellModeRaw = v) } }
+            )
+            SetDivider()
+            SetInfo(
+                title = "当前生效",
+                value = Priv.resolve(context, settings.shellMode()).label,
+                subtitle = "自动 = Root → Shizuku → 沙箱，按可用性顺位"
+            )
+            SetDivider()
+            SetInfo(
+                title = "Root",
+                value = when {
+                    !RootShell.hasBinary() -> "未检测到 su"
+                    RootShell.granted() -> "已授权"
+                    else -> "有 su，尚未授权"
+                },
+                subtitle = "在 Magisk / KernelSU 等超管管理器里给本应用放行"
+            )
+            SetDivider()
+            SetInfo(
+                title = "Shizuku",
+                value = when {
+                    !ShizukuShell.alive() -> "未运行"
+                    ShizukuShell.granted(context) -> "已授权"
+                    else -> "已运行，待授权"
+                },
+                subtitle = "装好 Shizuku 并用 adb / root 启动服务后点下面申请"
+            )
+            SetDivider()
+            SetAction(
+                title = "申请 Shizuku 授权",
+                subtitle = "弹 Shizuku 授权框；没装或服务没启动时不会有反应",
+                label = "申请",
+                enabled = ShizukuShell.alive()
+            ) { ShizukuShell.request() }
+            SetDivider()
+            SetAction(
+                title = "重新检测通道",
+                subtitle = "清掉 Root 探测缓存，重新确认一次权限",
+                label = "检测"
+            ) {
+                RootShell.reset()
+                RootShell.granted(force = true)
             }
         }
 

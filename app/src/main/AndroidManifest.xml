@@ -15,6 +15,8 @@
     <!-- 无障碍服务：让 AI 能模拟点击/滑动/输入，自动操作整台设备 -->
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
         tools:ignore="ProtectedPermissions" />
+    <!-- Shizuku：借 shell(2000) 权限执行命令；不装 Shizuku 时这一行不影响安装 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <queries>
         <intent>
@@ -27,6 +29,7 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
 
@@ -76,6 +79,15 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- Shizuku 客户端接入点：授权状态与 binder 回调靠它传递 -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <!-- 内置更新把安装包放在应用私有目录，通过它交给系统安装器 -->
         <provider

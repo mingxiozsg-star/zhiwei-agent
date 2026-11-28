@@ -16,8 +16,8 @@ android {
         applicationId = "com.zhiwei.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.8.0"
+        versionCode = 13
+        versionName = "1.9.0"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -93,6 +93,9 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.core)
     implementation(libs.okhttp)
+    // Shizuku：借 shell 权限执行命令（api 含 Shizuku 类与 ahidl，provider 提供授权通道）
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)

@@ -16,12 +16,13 @@
 - **密钥池**：一行一个 Key，可自动轮换；一键逐个测活，Key 无效 / 无权限 / 额度用尽分开提示
 - **容错重试**：超时、限流、5xx、断连都会自动重试（默认 6 次，可在设置里改），密钥池不止一个 Key 时重试必定换一个，退避最多等 6 秒；重试用完仍失败会自己补一轮「继续」，不把任务掐断。网关不认流式只回整段 JSON、模型只返回思考内容、上游真的返回空内容，这三种以前会「额度扣了但界面一个字没有」的情况，现在都能正常显示或明确报错
 - **思考与正文分家**：思维链（reasoning / thinking）单独走一条通道，折叠在气泡里，点一下才展开，绝不会被当成正文吐出来；万一模型只回思考不给正文，会自动补要一次，不惯着
-- **工具调用**：内置 33 个工具，模型可按需自行调用
+- **工具调用**：内置 34 个工具，模型可按需自行调用
   - 当前时间、计算器（支持一次传多个表达式批处理）、设备信息（机型/系统/电量/内存）、读剪贴板、记忆检索、知识库检索
-  - 打开链接、抓取网页正文、联网搜索（需自备 Tavily Key）
-  - 终端命令（默认关闭，开启后模型可在应用沙箱内执行 shell，走的是常驻会话，`cd` / `export` 与你在终端页里写的配置都生效）
+  - 打开链接、抓取网页正文、联网搜索（内置必应，**不用填 Key**；填了 Tavily 就优先走 Tavily，长文摘要更细）
+  - 终端命令（默认关闭。开启后模型可执行 shell，走的是常驻会话，`cd` / `export` 与你在终端页里写的配置都生效。执行通道可选 **自动 / 沙箱 / Shizuku / Root**：自动按 Root → Shizuku → 沙箱顺位降级，有 root 就是 uid 0，装了 Shizuku 并授权就是 shell 权限，都没有就退回应用自己的沙箱。选错了不会硬失败，只会往下掉一级）
   - 读文件、写文件、列目录（工作区内），截屏（首次用需在系统弹窗里授权一次，截好的图会直接带回对话让模型看图作答）
   - 自动操作：点击坐标、滑动、输入文字、按返回/主页/最近任务、按文字点击控件（需开启无障碍服务）
+- **特权通道**：设置 →「工具与权限」页新增「命令执行通道」一栏，实时显示 Root / Shizuku / 当前生效通道，带「申请 Shizuku 授权」与「重新检测通道」两个按钮。模型可以用 `check_privilege` 随时自查现在能伸手到哪，不用瞎试权限。Root 只在真的拿到 `uid=0` 时才认，绝不假装成功
 - **自动操作权限**：设置 →「工具与权限」页有「设备自动化权限」一栏，实时显示无障碍服务与「修改系统设置」的授权状态，点一下直接跳到对应系统页面。开启无障碍后模型才能真正代替手指操作屏幕，这也是无 root 环境里能拿到的最强控制权
 - **设备操控**：音量、亮度、手电筒、震动、写剪贴板、跳系统设置页、列出/打开应用、媒体播放控制、朗读回复。用说话的方式就能用（"声音小一点""开手电""打开微信"），默认开启，可在设置里整体关掉
 - **工具预算**：时间/计算/设备信息这类本地只读工具不占预算，只有实际操作设备的才计费；默认每回合 12 次，用完了会提示回一句「继续」，不会直接把对话掐断。同一次提问里同参数的工具只真跑一遍，重复要求复用上次结果
@@ -90,12 +91,13 @@ An AI agent that lives in your phone. Point it at any OpenAI-compatible endpoint
 - **Key pool** — one key per line, optionally rotating; test them all in one tap, with invalid / unauthorised / quota-exhausted told apart
 - **Retries that actually retry** — timeouts, rate limits, 5xx and dropped connections are retried automatically (6 times by default, adjustable), always switching to another key when the pool has more than one, backing off up to 6 seconds; if retries run out the agent adds its own "continue" instead of killing the task. A gateway that ignores `stream:true` and returns one plain JSON blob, a model that only returns its reasoning, or genuinely empty upstream output — the three cases that used to burn tokens and print nothing — now either render or fail with a clear reason
 - **Reasoning kept out of the answer** — the thinking chain (reasoning / thinking) travels on its own channel and stays folded inside the bubble, one tap to expand; it is never printed as the answer. If a model hands back nothing but reasoning, the agent asks once for the actual answer instead of letting it slide
-- **Tool calling** — 33 built-in tools the model can invoke on its own
+- **Tool calling** — 34 built-in tools the model can invoke on its own
   - current time, calculator (takes several expressions in one batch call), device info (model / OS / battery / memory), read clipboard, memory search, knowledge search
-  - open URL, fetch page text, web search (bring your own Tavily key)
-  - shell command (off by default; when enabled the model may run shell inside the app sandbox — it uses the persistent session, so `cd` / `export` and whatever you configured in the terminal page carry over)
+  - open URL, fetch page text, web search (built-in Bing, **no key needed**; add a Tavily key and it takes priority for longer snippets)
+  - shell command (off by default. Once enabled the model may run shell through the persistent session, so `cd` / `export` and your terminal-page settings carry over. Pick the execution channel — **auto / sandbox / Shizuku / root**: auto falls back root → Shizuku → sandbox, so root means uid 0, an authorised Shizuku means shell privileges, and neither means the app sandbox. A wrong pick degrades one level instead of failing hard)
   - read file, write file, list directory (inside the workspace), and screenshot (one system grant the first time; the capture is fed straight back into the conversation so the model answers from the picture)
   - UI automation: tap a coordinate, swipe, type into the focused field, press back / home / recents, tap a widget by its text (requires the accessibility service)
+- **Privileged channels** — Settings → **Tools & permissions** gains a **Command channel** block showing live root / Shizuku / effective-channel status, with buttons to request Shizuku permission and to re-probe. The model can call `check_privilege` to see exactly how far it can reach instead of guessing. Root counts only when it really gets `uid=0` — no pretending
 - **Automation permissions** — Settings → **Tools & permissions** has a **Device automation** block that shows live status for the accessibility service and "modify system settings", each with a button that deep-links to the matching system page. The accessibility service is the only way to really drive the screen without root, and it only starts doing anything after you enable it yourself
 - **Device control** — volume, brightness, torch, vibration, clipboard write, jump to system settings, list/open apps, media playback control, speak the reply. Just say it ("volume down", "torch on", "open WeChat"). On by default and switchable off in Settings
 - **Tool budget** — local read-only tools (time, calculator, device info) are free; only tools that touch the device are billed. 12 per turn by default, and running out prompts you to reply "continue" instead of cutting the conversation off. Within one question, an identical call with identical arguments runs once; repeats reuse the previous result

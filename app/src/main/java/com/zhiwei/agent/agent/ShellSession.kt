@@ -1,5 +1,6 @@
 package com.zhiwei.agent.agent
 
+import android.content.Context
 import java.io.File
 import java.io.OutputStream
 import com.zhiwei.agent.data.AppSettings
@@ -25,13 +26,20 @@ data class TermResult(
 class ShellSession(
     private val home: File,
     private val extraEnv: Map<String, String> = emptyMap(),
-    private val profile: List<String> = emptyList()
+    private val profile: List<String> = emptyList(),
+    /** 用户选定的通道；实际生效的通道由 [Priv.resolve] 降级后写进 [activeMode] */
+    private val wantMode: ShellMode = ShellMode.SANDBOX,
+    private val context: Context? = null
 ) {
 
     private var process: Process? = null
     private var sink: OutputStream? = null
     private val out = StringBuilder()
     private val execLock = Any()
+
+    /** 会话真正跑起来的通道，供界面与模型查看 */
+    @Volatile var activeMode: ShellMode = ShellMode.SANDBOX
+        private set
 
     @Volatile private var cwdPath: String = home.absolutePath
     @Volatile private var running = false
@@ -43,8 +51,8 @@ class ShellSession(
     fun isAlive(): Boolean = process?.isAlive == true
 
     /** 配置没变就不用重建会话；变了就重建，让新环境变量/启动脚本生效 */
-    fun matches(env: Map<String, String>, prof: List<String>): Boolean =
-        extraEnv == env && profile == prof
+    fun matches(env: Map<String, String>, prof: List<String>, mode: ShellMode): Boolean =
+        extraEnv == env && profile == prof && wantMode == mode
 
     /** 会话里能找到命令的目录：系统自带的优先，应用自己的 bin 兜底 */
     private fun pathEnv(): String = listOf(
@@ -63,22 +71,23 @@ class ShellSession(
         val p = process
         if (p != null && p.isAlive) return
         val tmp = File(home, ".tmp").also { it.mkdirs() }
-        val pb = ProcessBuilder("sh")
-        pb.directory(home)
-        pb.redirectErrorStream(true)
-        pb.environment().apply {
-            this["HOME"] = home.absolutePath
-            this["TMPDIR"] = tmp.absolutePath
-            this["PATH"] = pathEnv()
-            this["LANG"] = "en_US.UTF-8"
-            this["LC_ALL"] = "en_US.UTF-8"
-            this["TERM"] = "xterm-256color"
-            this["SHELL"] = "sh"
-            this["PWD"] = home.absolutePath
+        val envMap = buildMap {
+            put("HOME", home.absolutePath)
+            put("TMPDIR", tmp.absolutePath)
+            put("PATH", pathEnv())
+            put("LANG", "en_US.UTF-8")
+            put("LC_ALL", "en_US.UTF-8")
+            put("TERM", "xterm-256color")
+            put("SHELL", "sh")
+            put("PWD", home.absolutePath)
             // 用户配置的额外变量最后写入，允许覆盖上面这些默认值
-            extraEnv.forEach { (k, v) -> this[k] = v }
+            putAll(extraEnv)
         }
-        val np = pb.start()
+        // 先按用户选的通道起，起不来就逐级往下退：Root → Shizuku → 沙箱
+        val np = startWithFallback(envMap) ?: run {
+            activeMode = ShellMode.SANDBOX
+            startLocal(envMap)
+        }
         process = np
         sink = np.outputStream
         cwdPath = home.absolutePath
@@ -113,6 +122,50 @@ class ShellSession(
                 "umask 022\n" +
                 if (profileBlock.isEmpty()) "" else profileBlock + "\n"
         )
+    }
+
+    /**
+     * 按 wantMode 起进程，失败则逐级降级。
+     *
+     * Root 用 `su -c sh`，Shizuku 走 newProcess —— 两者都只是把 sh 换成「有更高权限的 sh」，
+     * 上层命令执行逻辑一行都不用改。
+     */
+    private fun startWithFallback(envMap: Map<String, String>): Process? {
+        val order = when (wantMode) {
+            ShellMode.ROOT -> listOf(ShellMode.ROOT, ShellMode.SHIZUKU, ShellMode.SANDBOX)
+            ShellMode.SHIZUKU -> listOf(ShellMode.SHIZUKU, ShellMode.SANDBOX)
+            ShellMode.SANDBOX -> listOf(ShellMode.SANDBOX)
+            ShellMode.AUTO -> listOf(ShellMode.ROOT, ShellMode.SHIZUKU, ShellMode.SANDBOX)
+        }
+        for (mode in order) {
+            val real = if (mode == ShellMode.SANDBOX) ShellMode.SANDBOX else Priv.resolve(context, mode)
+            if (real != mode) continue
+            val proc = when (mode) {
+                ShellMode.ROOT -> runCatching {
+                    ProcessBuilder("su", "-c", "sh")
+                        .directory(home)
+                        .redirectErrorStream(true)
+                        .also { pb -> pb.environment().putAll(envMap) }
+                        .start()
+                }.getOrNull()
+                ShellMode.SHIZUKU -> ShizukuShell.open(arrayOf("sh"), envMap, home.absolutePath)
+                else -> startLocal(envMap)
+            }
+            if (proc != null) {
+                activeMode = mode
+                return proc
+            }
+        }
+        activeMode = ShellMode.SANDBOX
+        return null
+    }
+
+    private fun startLocal(envMap: Map<String, String>): Process {
+        val pb = ProcessBuilder("sh")
+        pb.directory(home)
+        pb.redirectErrorStream(true)
+        pb.environment().putAll(envMap)
+        return pb.start()
     }
 
     private fun sprint(text: String) {
@@ -221,23 +274,25 @@ object Term {
         key: String,
         home: File,
         extraEnv: Map<String, String>,
-        profile: List<String>
+        profile: List<String>,
+        mode: ShellMode,
+        context: Context?
     ): ShellSession {
         val exist = sessions[key]
-        if (exist != null && exist.homeDir() == home.absolutePath && exist.matches(extraEnv, profile)) {
+        if (exist != null && exist.homeDir() == home.absolutePath && exist.matches(extraEnv, profile, mode)) {
             return exist
         }
         exist?.close()
-        val s = ShellSession(home, extraEnv, profile)
+        val s = ShellSession(home, extraEnv, profile, mode, context)
         sessions[key] = s
         return s
     }
 
     /** 用户在终端页里用的会话 */
-    fun ui(home: File, settings: AppSettings): ShellSession =
-        of("ui", home, settings.terminalEnv(), settings.terminalProfile())
+    fun ui(home: File, settings: AppSettings, context: Context? = null): ShellSession =
+        of("ui", home, settings.terminalEnv(), settings.terminalProfile(), settings.shellMode(), context)
 
     /** 模型通过「终端命令」工具用的会话，跟界面上的分开，避免互相打断 */
-    fun tool(home: File, settings: AppSettings): ShellSession =
-        of("tool", home, settings.terminalEnv(), settings.terminalProfile())
+    fun tool(home: File, settings: AppSettings, context: Context? = null): ShellSession =
+        of("tool", home, settings.terminalEnv(), settings.terminalProfile(), settings.shellMode(), context)
 }

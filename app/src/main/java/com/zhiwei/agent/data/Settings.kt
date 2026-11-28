@@ -1,6 +1,6 @@
 package com.zhiwei.agent.data
-
 import android.content.Context
+import com.zhiwei.agent.agent.ShellMode
 
 const val THEME_SYSTEM = "system"
 const val THEME_LIGHT = "light"
@@ -188,7 +188,13 @@ data class AppSettings(
     /** 终端额外环境变量：每行 KEY=VALUE，会话启动时注入 */
     val terminalEnvRaw: String = "",
     /** 终端启动脚本：每行一条 shell 命令，会话建立时自动执行 */
-    val terminalProfileRaw: String = ""
+    val terminalProfileRaw: String = "",
+    // ---- 特权 ----
+    /**
+     * 命令执行通道：auto / sandbox / shizuku / root。
+     * auto 按 Root → Shizuku → 沙箱 顺位挑当前真能用的那个。
+     */
+    val shellModeRaw: String = ShellMode.AUTO.key
 ) {
     /** 解析收藏的模型名 */
     fun favoriteModels(): List<String> = favoriteModelsRaw
@@ -214,6 +220,9 @@ data class AppSettings(
         .map { it.trim() }
         .filter { it.isNotEmpty() && !it.startsWith("#") }
         .toList()
+
+    /** 命令执行通道 */
+    fun shellMode(): ShellMode = ShellMode.of(shellModeRaw)
     /** 补全成完整的 chat/completions 地址 */
     fun endpoint(): String {
         var base = baseUrl.trim()
@@ -305,7 +314,8 @@ class SettingsStore(context: Context) {
         favoriteModelsRaw = sp.getString("favoriteModelsRaw", "") ?: "",
         mirrorFirst = sp.getBoolean("mirrorFirst", true),
         terminalEnvRaw = sp.getString("terminalEnvRaw", "") ?: "",
-        terminalProfileRaw = sp.getString("terminalProfileRaw", "") ?: ""
+        terminalProfileRaw = sp.getString("terminalProfileRaw", "") ?: "",
+        shellModeRaw = sp.getString("shellModeRaw", ShellMode.AUTO.key) ?: ShellMode.AUTO.key
     )
 
     /**
@@ -379,6 +389,7 @@ class SettingsStore(context: Context) {
             .putBoolean("mirrorFirst", s.mirrorFirst)
             .putString("terminalEnvRaw", s.terminalEnvRaw)
             .putString("terminalProfileRaw", s.terminalProfileRaw)
+            .putString("shellModeRaw", s.shellModeRaw)
             .apply()
     }
 }
