@@ -1,6 +1,7 @@
 package com.zhiwei.agent.data
 import android.content.Context
 import com.zhiwei.agent.agent.ShellMode
+import com.zhiwei.agent.agent.Environment
 
 const val THEME_SYSTEM = "system"
 const val THEME_LIGHT = "light"
@@ -127,7 +128,7 @@ data class AppSettings(
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
     val streamOutput: Boolean = true,
     val enableTools: Boolean = true,
-    val enableShellTool: Boolean = false,
+    val enableShellTool: Boolean = true,
     /** 设备操控类工具（音量、亮度、手电筒、震动、应用开关等）总开关 */
     val enableDeviceTools: Boolean = true,
     val tavilyApiKey: String = "",
@@ -194,7 +195,9 @@ data class AppSettings(
      * 命令执行通道：auto / sandbox / shizuku / root。
      * auto 按 Root → Shizuku → 沙箱 顺位挑当前真能用的那个。
      */
-    val shellModeRaw: String = ShellMode.AUTO.key
+    val shellModeRaw: String = ShellMode.AUTO.key,
+    /** 运行环境：安卓原生 / 内置 Linux（Alpine + proot） */
+    val linuxEnvRaw: String = Environment.ANDROID.key
 ) {
     /** 解析收藏的模型名 */
     fun favoriteModels(): List<String> = favoriteModelsRaw
@@ -223,6 +226,7 @@ data class AppSettings(
 
     /** 命令执行通道 */
     fun shellMode(): ShellMode = ShellMode.of(shellModeRaw)
+    fun linuxEnv(): Environment = Environment.of(linuxEnvRaw)
     /** 补全成完整的 chat/completions 地址 */
     fun endpoint(): String {
         var base = baseUrl.trim()
@@ -282,7 +286,7 @@ class SettingsStore(context: Context) {
         systemPrompt = loadSystemPrompt(),
         streamOutput = sp.getBoolean("streamOutput", true),
         enableTools = sp.getBoolean("enableTools", true),
-        enableShellTool = sp.getBoolean("enableShellTool", false),
+        enableShellTool = shellToolDefault(),
         enableDeviceTools = sp.getBoolean("enableDeviceTools", true),
         tavilyApiKey = sp.getString("tavilyApiKey", "") ?: "",
         toolMaxRounds = sp.getInt("toolMaxRounds", 12),
@@ -315,8 +319,27 @@ class SettingsStore(context: Context) {
         mirrorFirst = sp.getBoolean("mirrorFirst", true),
         terminalEnvRaw = sp.getString("terminalEnvRaw", "") ?: "",
         terminalProfileRaw = sp.getString("terminalProfileRaw", "") ?: "",
-        shellModeRaw = sp.getString("shellModeRaw", ShellMode.AUTO.key) ?: ShellMode.AUTO.key
+        shellModeRaw = sp.getString("shellModeRaw", ShellMode.AUTO.key) ?: ShellMode.AUTO.key,
+        linuxEnvRaw = sp.getString("linuxEnvRaw", Environment.ANDROID.key) ?: Environment.ANDROID.key
     )
+
+    /**
+     * 1.9.1 之前 enableShellTool 的默认值是 false，等于 run_shell 压根不下发给模型——
+     * 用户看到的就是“让你跑命令你跑不了”。旧版本还把这个 false 持久化了，
+     * 光改代码里的默认值对已升级用户无效，所以做一次性迁移：
+     * 升级后首次启动把历史遗留的值翻成 true，此后用户自己怎么改都尊重。
+     */
+    private fun shellToolDefault(): Boolean {
+        val migrated = sp.getBoolean("shellToolMigratedV191", false)
+        if (!migrated) {
+            sp.edit()
+                .putBoolean("shellToolMigratedV191", true)
+                .putBoolean("enableShellTool", true)
+                .apply()
+            return true
+        }
+        return sp.getBoolean("enableShellTool", true)
+    }
 
     /**
      * 系统提示词升级：只在用户没动过（还是老版本默认文案）时才换成新版，
@@ -390,6 +413,7 @@ class SettingsStore(context: Context) {
             .putString("terminalEnvRaw", s.terminalEnvRaw)
             .putString("terminalProfileRaw", s.terminalProfileRaw)
             .putString("shellModeRaw", s.shellModeRaw)
+            .putString("linuxEnvRaw", s.linuxEnvRaw)
             .apply()
     }
 }

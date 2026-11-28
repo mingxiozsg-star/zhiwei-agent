@@ -410,10 +410,14 @@ object ToolRegistry {
         )
 
         if (settings.enableShellTool) {
+            val envLabel = env.settings.linuxEnv().label
             list += ToolSpec(
                 TOOL_SHELL,
                 "终端命令",
-                "在手机本地执行一条 shell 命令并返回输出，可用于查看文件、系统信息等。",
+                "在本机执行一条 shell 命令并返回输出。当前运行环境：$envLabel。" +
+                    "可用于查看文件、系统信息、开关应用、改系统设置等；" +
+                    "权限取决于设置里的命令执行通道（沙箱 / Shizuku shell 权限 / Root 全权限），" +
+                    "不确定能做什么就先调 $TOOL_PRIV 查一次。",
                 schema("command" to str("要执行的 shell 命令"), required = listOf("command"))
             )
         }
@@ -846,6 +850,23 @@ object ToolRegistry {
                 "无障碍未开启，屏幕类工具不可用（设置 → 工具与权限 → 去开启）"
             }
         )
+        append("\n\n【运行环境】")
+        append(env.settings.linuxEnv().label)
+        append("（")
+        append(
+            when {
+                !LinuxEnv.supported() -> "本机 ABI 不支持内置 Linux"
+                LinuxEnv.installed(env.context) -> "Alpine ${LinuxEnv.VERSION}，proot 常驻可用"
+                else -> "未安装，需在设置页点安装"
+            }
+        )
+        append("）")
+        if (env.settings.linuxEnv() == Environment.LINUX && !LinuxEnv.installed(env.context)) {
+            append("\n注意：已选 Linux 但环境没装好，命令会直接报错，先去装。")
+        } else if (env.settings.linuxEnv() == Environment.LINUX) {
+            append("\n提示：Linux 环境里可用 apk add 装软件，路径是 Linux 语义（/root、/usr、/etc）。")
+        }
+
         append("\n【搜索】")
         append(if (env.settings.tavilyApiKey.isNotBlank()) "Tavily（已配 Key）" else "内置必应（无需 Key）")
     }
@@ -856,9 +877,11 @@ object ToolRegistry {
         // 用常驻会话跑：cd / export 留得住，并且会带上用户在「终端环境配置」里写的变量与启动脚本
         val result = Term.tool(home, settings, context).run(command, timeoutMs = 60000, maxChars = 6000)
         val body = result.output.trim()
+        val envTag = settings.linuxEnv().label
         return buildString {
             if (body.isNotEmpty()) append(body) else append("（无输出）")
-            append("\n[退出码 ").append(result.exitCode).append(']')
+            append("\n[退出码 ").append(result.exitCode)
+            append(" | 环境 ").append(envTag).append(']')
             if (result.cwd.isNotBlank() && result.cwd != home.absolutePath) {
                 append("\n[当前目录 ").append(result.cwd).append(']')
             }

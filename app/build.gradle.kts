@@ -16,8 +16,12 @@ android {
         applicationId = "com.zhiwei.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.9.0"
+        versionCode = 14
+        versionName = "1.9.1"
+        // 内置 Linux 的 proot 只有 arm64-v8a 二进制，其它 ABI 打进去也跑不起来
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
 
         vectorDrawables {
             useSupportLibrary = true
@@ -62,9 +66,20 @@ android {
     buildFeatures {
         compose = true
     }
+    // rootfs 已是 gzip，原样打包。
+    // 注意：后缀必须避开 .gz/.tar.gz —— AGP 在 mergeAssets 阶段会无条件解压这些后缀
+    // 并改名成 .tar（3.9MB 变 9.1MB，noCompress 拦不住），所以这里用自定义后缀 .rootfs
+    androidResources {
+        noCompress += "rootfs"
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // proot 要被 exec，必须真正解压到 nativeLibraryDir；
+        // AGP 默认不落盘、由 linker 直接 mmap，那种模式下拿不到实体文件
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }

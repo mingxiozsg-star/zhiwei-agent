@@ -28,6 +28,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,6 +40,8 @@ import com.zhiwei.agent.AppScreen
 import com.zhiwei.agent.ChatViewModel
 import com.zhiwei.agent.agent.AccessibilityAgentService
 import com.zhiwei.agent.agent.Priv
+import com.zhiwei.agent.agent.LinuxEnv
+import com.zhiwei.agent.agent.Environment
 import com.zhiwei.agent.agent.RootShell
 import com.zhiwei.agent.agent.ShizukuShell
 import com.zhiwei.agent.agent.ShellMode
@@ -492,6 +498,17 @@ fun ToolsSettingsPage(vm: ChatViewModel) {
     }
 
     SetPage {
+    var linuxState by remember { mutableStateOf(LinuxEnv.State.ABSENT) }
+    var linuxErr by remember { mutableStateOf("") }
+    var linuxBusy by remember { mutableStateOf(false) }
+    var linuxMsg by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        LinuxEnv.refresh(context)
+        linuxState = LinuxEnv.state
+        linuxErr = LinuxEnv.lastError
+    }
+    val linuxScope = rememberCoroutineScope()
+
         SetSection("内置工具总开关") {
             SetSwitch(
                 title = "允许调用工具",
@@ -551,6 +568,82 @@ fun ToolsSettingsPage(vm: ChatViewModel) {
                         Uri.parse("package:" + context.packageName)
                     )
                     context.startActivity(intent)
+                }
+            }
+        }
+
+        SetSection("运行环境") {
+            SetChipPicker(
+                title = "用哪套用户空间",
+                subtitle = "安卓原生：toybox，快、零启动开销；Linux：Alpine + proot，能用 apk 装软件",
+                selected = settings.linuxEnvRaw,
+                options = Environment.entries.map { it.key to it.label },
+                onSelect = { v -> vm.updateSettings { it.copy(linuxEnvRaw = v) } }
+            )
+            SetDivider()
+            SetInfo(
+                title = "Linux 环境",
+                value = when {
+                    !LinuxEnv.supported() -> "本机不支持"
+                    linuxBusy -> "处理中…"
+                    linuxState == LinuxEnv.State.READY -> "已安装（${LinuxEnv.VERSION}）"
+                    linuxState == LinuxEnv.State.BROKEN -> "异常"
+                    else -> "未安装"
+                },
+                subtitle = if (linuxErr.isNotBlank()) linuxErr
+                else "解压一次约 3.9MB，之后 apk add 可装任意 Alpine 软件"
+            )
+            SetDivider()
+            SetAction(
+                title = if (linuxState == LinuxEnv.State.READY) "重新解压" else "安装 / 修复",
+                subtitle = "从内置包解压，不联网；装完自动写入国内源与 DNS",
+                label = if (linuxBusy) "请稍候" else "安装",
+                enabled = !linuxBusy && LinuxEnv.supported()
+            ) {
+                linuxBusy = true
+                linuxMsg = ""
+                linuxScope.launch(Dispatchers.IO) {
+                    val ok = LinuxEnv.install(context) { linuxMsg = it }
+                    withContext(Dispatchers.Main) {
+                        linuxState = LinuxEnv.state
+                        linuxErr = LinuxEnv.lastError
+                        linuxMsg = if (ok) "已装好" else "失败：${LinuxEnv.lastError}"
+                        linuxBusy = false
+                    }
+                }
+            }
+            if (linuxMsg.isNotBlank()) {
+                SetDivider()
+                SetInfo(title = "最近一次操作", value = linuxMsg)
+            }
+            SetDivider()
+            SetAction(
+                title = "删除 Linux 环境",
+                subtitle = "只删应用私有目录里的 rootfs，不影响安卓原生终端",
+                label = "删除",
+                enabled = !linuxBusy && linuxState == LinuxEnv.State.READY
+            ) {
+                linuxScope.launch(Dispatchers.IO) {
+                    LinuxEnv.uninstall(context)
+                    withContext(Dispatchers.Main) {
+                        linuxState = LinuxEnv.state
+                        linuxErr = LinuxEnv.lastError
+                        linuxMsg = "已删除"
+                    }
+                }
+            }
+            SetDivider()
+            SetAction(
+                title = "自检",
+                subtitle = "跑一次 cat /etc/os-release 与 id，确认 proot 真的进得去",
+                label = "运行",
+                enabled = !linuxBusy && linuxState == LinuxEnv.State.READY
+            ) {
+                linuxScope.launch(Dispatchers.IO) {
+                    val r = LinuxEnv.run(context, "head -2 /etc/os-release; id; echo SHELL=\$0", 45_000)
+                    withContext(Dispatchers.Main) {
+                        linuxMsg = "退出码 ${r.exitCode}\n" + r.output.trim().take(300)
+                    }
                 }
             }
         }

@@ -33,6 +33,26 @@ enum class ShellMode(val key: String, val label: String) {
 }
 
 /**
+ * 运行环境。跟 [ShellMode] 是两个正交的维度：
+ * [ShellMode] 决定借谁的权限，[Environment] 决定用什么用户空间。
+ *
+ * 安卓原生是 toybox + bionic，轻、快、零启动开销，日常单条命令用它；
+ * Linux 是 Alpine + proot，有 apk 包管理、GNU 工具链、完整的 /usr 结构，
+ * 编译、装软件、跑脚本用它。两套并存，随时切，不用二选一。
+ */
+enum class Environment(val key: String, val label: String) {
+    ANDROID("android", "安卓原生"),
+    LINUX("linux", "Linux");
+
+    companion object {
+        fun of(raw: String): Environment {
+            val k = raw.trim().lowercase()
+            return entries.firstOrNull { it.key == k } ?: ANDROID
+        }
+    }
+}
+
+/**
  * Root 通道。
  *
  * 没有 root 时连 su 二进制都找不到，检测成本极低；有 su 时跑一次 `id` 确认真的拿到了 uid=0，

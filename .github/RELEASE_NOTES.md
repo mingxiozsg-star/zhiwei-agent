@@ -1,29 +1,29 @@
 ## 中文
 
-v1.9.0 把 AI 的手伸出了沙箱——它现在可以借 Root 或 Shizuku 的权限执行命令，真正操控整台设备。
+v1.9.1 修了一个让人火大的问题：你让它跑命令，它跑不了。同时把一台真正的 Linux 装进了 APK。
 
-**命令执行通道**
+**先修「调用不了」**
 
-设置 →「工具与权限」新增「命令执行通道」一栏：
+两个故障叠在一起，缺一个都修不好：
 
-- 四档可选：自动 / 沙箱 / Shizuku / Root
-- 自动按 Root → Shizuku → 沙箱顺位降级，选错了不会硬失败，只会往下掉一级
-- 实时显示 Root 与 Shizuku 的检测结果和当前真正生效的通道
-- 「申请 Shizuku 授权」直接弹授权框；「重新检测通道」清掉探测缓存重来一次
+- 「终端命令」开关默认是关的，`run_shell` 压根没下发给模型。模型看不见这个工具，自然调不动。现在默认开启。
+- 更隐蔽的是：旧版本把这个 `false` 存进了本地配置，光改代码默认值救不回来，升级上来的用户依然关着。所以做了次一次性迁移，升级后首次启动自动打开，之后你自己怎么改都尊重。
+- `run_shell` 的工具描述重写了，把「当前运行环境」和「权限取决于哪条通道」直接写进去——描述是模型唯一的能力说明书，写不清楚它就不知道能干什么。
 
-Root 通道只在真的拿到 `uid=0` 时才认，探测时同时试 `su -c id` 与 `su 0 id` 两种形式，都会失败就当没有 root，不假装成功。结果缓存起来，不会每条命令都去敲一遍 su。
+另外修了 proot 二进制不落盘的问题：AGP 默认把 `.so` 留在 APK 内 mmap，`nativeLibraryDir` 里没有实体文件，`exec` 直接失败。开启 `useLegacyPackaging` 后才真正解压到磁盘。
 
-**AI 能自查权限**
+**内置 Linux 环境**
 
-新增工具 `check_privilege`，把三条通道的可用状态、当前设置与实际生效通道、屏幕自动化是否开启、搜索走的哪条线一次性摊开给模型。它不用再靠猜来试权限，也不会在沙箱里反复撞墙。
+设置 →「工具与权限」新增「运行环境」一栏，两个维度正交，随便组合：
 
-**内置网络搜索，不用再填 Key**
+- **权限通道** 自动 / 沙箱 / Shizuku / Root —— 决定借谁的权限
+- **运行环境** 安卓原生 / 内置 Linux —— 决定用户空间
 
-`web_search` 原本要自备 Tavily Key 才会注册，现在改为始终可用：没填 Key 时走内置必应搜索，填了就优先走 Tavily（长文摘要更细），Tavily 失败自动回落必应。装上就能搜。
+内置 Linux 是 Alpine 3.20.9，rootfs 随 APK 分发（约 3.9MB，不联网下载），一键解压即可用。装完能 `apk add python3 git gcc curl`，有完整 `/usr` 和 GNU 工具链，`/sdcard` 自动挂载。两套环境并存，随时切，卸载只删 rootfs，不影响安卓原生终端。
 
-**终端工具接上强权限**
+用的是 proot 而不是 chroot。原因很实在：chroot 需要 `CAP_SYS_CHROOT`，普通应用和 shell 用户都拿不到（实测 `chroot: Operation not permitted`）。proot 走 ptrace 在用户态模拟，不需要任何特权，代价是有一定性能损耗。
 
-开启「沙箱终端工具」后，模型调「终端命令」时会走上面选的通道，会话依然是常驻的，`cd`、`export` 和你写的环境变量、启动脚本全部继承。Root 通道下它看到的就是 `uid=0`，能读系统目录、改系统属性、调 `pm` / `am` / `settings`。
+已内置 `/etc/resolv.conf`（阿里 / 腾讯 / Cloudflare 三路 DNS）和 `/etc/apk/repositories`（阿里云 + 清华 + 官方三源），装完直接能联网装包。
 
 **下载**
 
@@ -36,30 +36,30 @@ Root 通道只在真的拿到 `uid=0` 时才认，探测时同时试 `su -c id` 
 
 ## English
 
-v1.9.0 reaches past the sandbox — the agent can now run commands through Root or Shizuku and genuinely drive the whole device.
+v1.9.1 fixes an infuriating bug: you ask it to run a command, and it can't. It also puts a real Linux inside the APK.
 
-**Command execution channel**
+**First, the "it can't call the tool" fix**
 
-Settings → **Tools & permissions** gains a **Command channel** block:
+Two faults stacked on top of each other; fixing only one does nothing:
 
-- Four options: auto / sandbox / Shizuku / root
-- Auto falls back root → Shizuku → sandbox, so a wrong pick degrades one level instead of failing hard
-- Live status for root and Shizuku detection, plus which channel is actually in effect
-- **Request Shizuku permission** pops the authorisation dialog; **Re-probe channels** clears the cache and re-checks
+- The shell tool switch defaulted to off, so `run_shell` was never sent to the model. The model cannot see a tool that isn't in its list, hence couldn't call it. Now on by default.
+- The subtler half: older builds persisted that `false` into local settings, so changing the code default rescues nobody who upgraded — they stay off. A one-shot migration now flips it on first launch after upgrading, and afterwards your own choice is respected.
+- The `run_shell` description was rewritten to state the current runtime and that privileges depend on the channel — the description is the model's only manual, so a vague one means it has no idea what it can do.
 
-The root channel counts only when it really gets `uid=0`. Probing tries both `su -c id` and `su 0 id`, and treats two failures as "no root" rather than pretending otherwise. The result is cached, so it does not knock on `su` for every single command.
+Also fixed proot binaries never landing on disk: AGP keeps `.so` inside the APK and mmaps them, leaving nothing in `nativeLibraryDir` to `exec`. Turning on `useLegacyPackaging` makes them real files.
 
-**The agent can check its own reach**
+**Bundled Linux runtime**
 
-A new `check_privilege` tool lays out the status of all three channels, the configured versus effective channel, whether screen automation is on, and which search backend is in use. No more guessing at permissions or bouncing off sandbox walls.
+Settings → **Tools & permissions** gains a **Runtime** block. Two orthogonal dimensions, mix freely:
 
-**Built-in web search, no key required**
+- **Privilege channel** auto / sandbox / Shizuku / root — whose privileges to borrow
+- **Runtime** Android-native / bundled Linux — which userland to run in
 
-`web_search` used to register only when a Tavily key was present. It is now always available: with no key it uses built-in Bing, with a key Tavily takes priority for longer snippets, and a Tavily failure falls back to Bing automatically.
+The bundled Linux is Alpine 3.20.9, shipped inside the APK (~3.9 MB, no download), extracted with one tap. Then `apk add python3 git gcc curl` just works, with a full `/usr`, a GNU toolchain, and `/sdcard` bind-mounted. Both runtimes coexist and switch any time; uninstalling deletes only the rootfs and leaves the Android-native terminal alone.
 
-**The shell tool now inherits real privileges**
+It uses proot rather than chroot, for a concrete reason: chroot needs `CAP_SYS_CHROOT`, which neither an ordinary app nor the shell user holds (measured: `chroot: Operation not permitted`). proot emulates in user space via ptrace and needs no privileges at all, at some performance cost.
 
-With the sandbox shell tool enabled, the model's shell commands run through whichever channel you picked, still in the persistent session — `cd`, `export`, your environment variables and startup script all carry over. Under root it sees `uid=0` and can read system directories, set properties, and drive `pm` / `am` / `settings`.
+`/etc/resolv.conf` (Aliyun / Tencent / Cloudflare DNS) and `/etc/apk/repositories` (Aliyun + Tsinghua + official mirrors) come preconfigured, so package installs work right away.
 
 **Download**
 

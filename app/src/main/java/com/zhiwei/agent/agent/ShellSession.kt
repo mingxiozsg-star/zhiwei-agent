@@ -29,7 +29,9 @@ class ShellSession(
     private val profile: List<String> = emptyList(),
     /** 用户选定的通道；实际生效的通道由 [Priv.resolve] 降级后写进 [activeMode] */
     private val wantMode: ShellMode = ShellMode.SANDBOX,
-    private val context: Context? = null
+    private val context: Context? = null,
+    /** 运行环境：安卓原生 shell 还是内置 Linux */
+    private val environment: Environment = Environment.ANDROID
 ) {
 
     private var process: Process? = null
@@ -41,18 +43,24 @@ class ShellSession(
     @Volatile var activeMode: ShellMode = ShellMode.SANDBOX
         private set
 
-    @Volatile private var cwdPath: String = home.absolutePath
+    @Volatile private var cwdPath: String =
+        if (environment == Environment.LINUX) "/root" else home.absolutePath
     @Volatile private var running = false
 
     fun homeDir(): String = home.absolutePath
 
     fun currentCwd(): String = cwdPath
 
-    fun isAlive(): Boolean = process?.isAlive == true
+    fun isAlive(): Boolean =
+        if (environment == Environment.LINUX) context?.let { LinuxEnv.installed(it) } == true
+        else process?.isAlive == true
 
     /** 配置没变就不用重建会话；变了就重建，让新环境变量/启动脚本生效 */
-    fun matches(env: Map<String, String>, prof: List<String>, mode: ShellMode): Boolean =
-        extraEnv == env && profile == prof && wantMode == mode
+    fun matches(env: Map<String, String>, prof: List<String>, mode: ShellMode, linux: Environment): Boolean =
+        extraEnv == env && profile == prof && wantMode == mode && environment == linux
+
+    /** Linux 环境不是常驻进程，每条命令单起一次 proot，所以“是否存活”按环境是否装好算 */
+    fun isLinux(): Boolean = environment == Environment.LINUX
 
     /** 会话里能找到命令的目录：系统自带的优先，应用自己的 bin 兜底 */
     private fun pathEnv(): String = listOf(
@@ -179,9 +187,76 @@ class ShellSession(
     }
 
     /** 跑一条命令：把输出、退出码与结束时的目录一起带回来 */
-    fun run(command: String, timeoutMs: Long = 20000, maxChars: Int = 20000): TermResult =
+    fun run(command: String, timeoutMs: Long = 20000, maxChars: Int = 20000): TermResult {
+        val cmd0 = command.trim()
+        // Linux 环境不常驻进程：每条命令单起一次 proot，把 cwd 记在会话里做“cd 留得住”
+        if (environment == Environment.LINUX) return runLinux(cmd0, timeoutMs, maxChars)
+        return runAndroid(cmd0, timeoutMs, maxChars)
+    }
+
+    /**
+     * 在 proot 里跑一条命令。
+     *
+     * proot 是一次性进程，没有常驻 shell 可挂，所以 `cd` 要单独处理：把 cd 的落脚点解析出来
+     * 存进 cwdPath，下一条命令用 -w 带进去，观感就跟常驻会话一样。
+     */
+    private fun runLinux(command: String, timeoutMs: Long, maxChars: Int): TermResult {
+        val ctx = context ?: return TermResult("Linux 环境需要 Context，但没传进来", cwdPath, -1, false)
+        if (!LinuxEnv.installed(ctx)) {
+            return TermResult(
+                "内置 Linux 还没装好。到「工具与权限 → 运行环境」点「安装 / 修复」即可（rootfs 约 3.9MB，解压一次）",
+                cwdPath, -1, false
+            )
+        }
+        if (command.isEmpty()) return TermResult("", cwdPath, 0, false)
+
+        // 纯 cd：只改工作目录，不起进程
+        val cdOnly = Regex("^cd\\s+(.+)$").find(command)
+        if (cdOnly != null) {
+            val want = cdOnly.groupValues[1].trim().trim('"', '\'')
+            val next = if (want == "~" || want.isEmpty()) "/root"
+            else if (want.startsWith("/")) want
+            else joinLinuxPath(cwdPath, want)
+            val probe = LinuxEnv.run(ctx, "cd \"$next\" 2>/dev/null && pwd || pwd", 15_000)
+            val real = probe.output.lineSequence().lastOrNull { it.trim().startsWith("/") }?.trim()
+            if (probe.exitCode == 0 && real != null && real.isNotEmpty() && !real.startsWith("cd: ")) {
+                cwdPath = real
+                return TermResult("", cwdPath, 0, false)
+            }
+            return TermResult(probe.output.trim().ifEmpty { "目录不存在：$next" }, cwdPath, probe.exitCode, false)
+        }
+
+        // 同一条命令里带 cd，跑完要把落脚点带回来
+        val wrapped = "cd \"$cwdPath\" 2>/dev/null; $command\n__zw_rc=\$?\nprintf '__ZWPWD__%s\\n' \"\$PWD\"\nexit \$__zw_rc"
+        val r = LinuxEnv.run(ctx, wrapped, timeoutMs)
+        var body = r.output
+        val marker = "__ZWPWD__"
+        val mi = body.lastIndexOf(marker)
+        if (mi >= 0) {
+            val tail = body.substring(mi + marker.length).lineSequence().firstOrNull()?.trim()
+            if (!tail.isNullOrEmpty()) cwdPath = tail
+            body = body.substring(0, mi)
+        }
+        val text = body.trimEnd()
+        val clipped = if (text.length > maxChars) text.take(maxChars) + "\n[输出被截断]" else text
+        return TermResult(clipped, cwdPath, r.exitCode, false)
+    }
+
+    private fun joinLinuxPath(base: String, rel: String): String {
+        val parts = (base.trimEnd('/') + "/" + rel).split('/')
+        val stack = ArrayDeque<String>()
+        for (p in parts) {
+            when (p) {
+                "", "." -> {}
+                ".." -> if (stack.isNotEmpty()) stack.removeLast()
+                else -> stack.addLast(p)
+            }
+        }
+        return "/" + stack.joinToString("/")
+    }
+
+    private fun runAndroid(cmd: String, timeoutMs: Long, maxChars: Int): TermResult =
         synchronized(execLock) {
-            val cmd = command.trim()
             if (cmd.isEmpty()) return TermResult("", cwdPath, 0, false)
             ensure()
             if (cmd == "exit" || cmd == "logout") {
@@ -250,7 +325,7 @@ class ShellSession(
         process = null
         sink = null
         running = false
-        cwdPath = home.absolutePath
+        cwdPath = if (environment == Environment.LINUX) "/root" else home.absolutePath
         synchronized(out) { out.setLength(0) }
     }
 
@@ -276,23 +351,26 @@ object Term {
         extraEnv: Map<String, String>,
         profile: List<String>,
         mode: ShellMode,
-        context: Context?
+        context: Context?,
+        env: Environment
     ): ShellSession {
-        val exist = sessions[key]
-        if (exist != null && exist.homeDir() == home.absolutePath && exist.matches(extraEnv, profile, mode)) {
+        // 运行环境变了就换一条会话，免得安卓 shell 和 proot 共用同一个 cwd 概念
+        val slot = "$key@${env.key}"
+        val exist = sessions[slot]
+        if (exist != null && exist.homeDir() == home.absolutePath && exist.matches(extraEnv, profile, mode, env)) {
             return exist
         }
         exist?.close()
-        val s = ShellSession(home, extraEnv, profile, mode, context)
-        sessions[key] = s
+        val s = ShellSession(home, extraEnv, profile, mode, context, env)
+        sessions[slot] = s
         return s
     }
 
     /** 用户在终端页里用的会话 */
     fun ui(home: File, settings: AppSettings, context: Context? = null): ShellSession =
-        of("ui", home, settings.terminalEnv(), settings.terminalProfile(), settings.shellMode(), context)
+        of("ui", home, settings.terminalEnv(), settings.terminalProfile(), settings.shellMode(), context, settings.linuxEnv())
 
     /** 模型通过「终端命令」工具用的会话，跟界面上的分开，避免互相打断 */
     fun tool(home: File, settings: AppSettings, context: Context? = null): ShellSession =
-        of("tool", home, settings.terminalEnv(), settings.terminalProfile(), settings.shellMode(), context)
+        of("tool", home, settings.terminalEnv(), settings.terminalProfile(), settings.shellMode(), context, settings.linuxEnv())
 }
